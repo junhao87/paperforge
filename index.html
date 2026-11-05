@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0c1528" />
+  <meta name="description" content="PaperForge — 免费、本地处理的 PDF 编辑与 Word 转换工作台。" />
+  <title>PaperForge · 智能 PDF 工作台</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">
+    <symbol id="ic-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></symbol>
+    <symbol id="ic-upload" viewBox="0 0 24 24"><path d="M12 16V3m0 0L7 8m5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="ic-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 1 0 7 7l1.7-1.7"/></symbol>
+    <symbol id="ic-pencil" viewBox="0 0 24 24"><path d="m15 5 4 4M3 21l5.5-1.2L20.1 8.2a2.8 2.8 0 0 0-4-4L4.5 15.8z"/></symbol>
+    <symbol id="ic-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="ic-download" viewBox="0 0 24 24"><path d="M12 3v13m0 0-5-5m5 5 5-5M4 17v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3"/></symbol>
+    <symbol id="ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+    <symbol id="ic-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Zm-9 10 9 5 9-5M3 17l9 5 9-5"/></symbol>
+    <symbol id="ic-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="ic-arrow" viewBox="0 0 24 24"><path d="M5 12h14m0 0-6-6m6 6-6 6"/></symbol>
+    <symbol id="ic-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 4v7m4-7v7"/></symbol>
+    <symbol id="ic-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 1 1 0 12h-2"/></symbol>
+    <symbol id="ic-shield" viewBox="0 0 24 24"><path d="m12 2 9 4v6c0 5.5-3.9 8.7-9 10-5.1-1.3-9-4.5-9-10V6z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="ic-zoom-in" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5M7 10.5h7m-3.5-3.5v7"/></symbol>
+    <symbol id="ic-zoom-out" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5M7 10.5h7"/></symbol>
+    <symbol id="ic-close" viewBox="0 0 24 24"><path d="M5 5 19 19M19 5 5 19"/></symbol>
+  </svg>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark"><svg><use href="#ic-layers"/></svg></div><div><strong>paperforge<span>.</span></strong><small>PDF WORKSPACE</small></div></div>
+      <div class="side-group">
+        <p class="side-label">WORKSPACE <span>工作空间</span></p>
+        <button class="side-action active" id="navEditor"><svg><use href="#ic-pencil"/></svg> PDF 编辑器 <span class="side-active-dot"></span></button>
+        <button class="side-action" id="navPdfWord"><svg><use href="#ic-file"/></svg> PDF 转 Word</button>
+        <button class="side-action" id="navWordPdf"><svg><use href="#ic-layers"/></svg> Word 转 PDF</button>
+        <button class="side-action" id="navUrl"><svg><use href="#ic-link"/></svg> 从 URL 打开</button>
+      </div>
+      <div class="side-group recent-group">
+        <p class="side-label">DOCUMENT <span>当前文件</span></p>
+        <div id="currentDocument" class="doc-status"><div class="doc-icon"><svg><use href="#ic-file"/></svg></div><div><strong>尚未选择文件</strong><small>PDF / DOCX</small></div></div>
+      </div>
+      <div class="side-bottom"><div class="privacy-mark"><svg><use href="#ic-shield"/></svg></div><strong>Private by design</strong><p>文件在浏览器本地处理，不会自动上传到服务器。</p><span class="private-chip"><i></i> LOCAL PROCESSING</span></div>
+      <div class="side-footer">PaperForge <span>v1.0 • Beta</span></div>
+    </aside>
+
+    <div class="app-main">
+      <header class="topbar"><div class="breadcrumbs"><span>工作空间</span><span class="crumb-slash">/</span><strong id="breadcrumb">PDF 编辑器</strong></div><div class="top-actions"><span class="local-badge"><i></i> 100% Browser-based</span><button class="top-open" id="topOpen"><svg><use href="#ic-upload"/></svg> 打开文件</button><button class="top-export" id="topExport" disabled><svg><use href="#ic-download"/></svg> 导出 PDF</button></div></header>
+
+      <section class="welcome" id="welcome">
+        <div class="hero-glow"></div>
+        <div class="hero-kicker"><span class="sparkle">✦</span> YOUR DOCUMENT, YOUR CONTROL <span class="hero-kicker-line"></span> 免费 PDF 工具</div>
+        <h1>让每一份文档<br /><em>恰如你所想。</em></h1>
+        <p class="hero-description">编辑 PDF 原有文字、添加新内容、转换 Word 格式。<br />一个轻量、直观、无需注册的文档工作空间。</p>
+        <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传 PDF 文件"><div class="upload-illustration"><div class="upload-back"></div><div class="upload-front"><svg><use href="#ic-file"/></svg><span>PDF</span></div><div class="upload-circle"><svg><use href="#ic-plus"/></svg></div></div><strong>拖放 PDF 到这里，或点击上传</strong><span>支持 PDF 文件 · 建议小于 30MB</span><button class="choose-btn" id="heroUpload">选择文件 <svg><use href="#ic-arrow"/></svg></button></div>
+        <div class="quick-actions"><button id="quickUrl"><span class="quick-icon purple"><svg><use href="#ic-link"/></svg></span><span><strong>URL 打开</strong><small>通过链接加载 PDF</small></span><svg class="quick-chevron"><use href="#ic-arrow"/></svg></button><button id="quickPdfWord"><span class="quick-icon blue"><svg><use href="#ic-file"/></svg></span><span><strong>PDF → Word</strong><small>提取文字生成 DOCX</small></span><svg class="quick-chevron"><use href="#ic-arrow"/></svg></button><button id="quickWordPdf"><span class="quick-icon orange"><svg><use href="#ic-layers"/></svg></span><span><strong>Word → PDF</strong><small>转换 DOCX 文档</small></span><svg class="quick-chevron"><use href="#ic-arrow"/></svg></button></div>
+        <div class="feature-strip"><span><svg><use href="#ic-check"/></svg> 无需登录</span><span><svg><use href="#ic-check"/></svg> 免费使用</span><span><svg><use href="#ic-check"/></svg> 本地处理</span><span><svg><use href="#ic-check"/></svg> 保留原始 PDF 页面</span></div>
+      </section>
+
+      <section class="editor hidden" id="editor">
+        <div class="editor-toolbar"><div class="tool-group"><button class="tool-pill selected" id="selectTool"><svg><use href="#ic-pencil"/></svg> 编辑文字</button><button class="tool-pill" id="addTool"><svg><use href="#ic-plus"/></svg> 添加文字</button><button class="tool-icon" id="undoTool" title="撤销上一步" disabled><svg><use href="#ic-undo"/></svg></button></div><div class="tool-group mid-tools"><span id="pageCount">0 页</span><span class="toolbar-line"></span><button class="tool-icon" id="zoomOut" title="缩小"><svg><use href="#ic-zoom-out"/></svg></button><strong id="zoomValue">100%</strong><button class="tool-icon" id="zoomIn" title="放大"><svg><use href="#ic-zoom-in"/></svg></button></div><button class="toolbar-save" id="editorExport"><svg><use href="#ic-download"/></svg> 保存 PDF</button></div>
+        <div class="editor-content"><div class="page-panel"><div class="panel-title">页面预览 <span id="thumbCount"></span></div><div id="thumbs" class="thumb-list"></div></div><div class="canvas-area" id="canvasArea"><div class="editor-hint" id="editorHint">点击 PDF 上的文字即可修改 · 选择「添加文字」后点击页面可插入新文字</div><div id="pageStack" class="page-stack"></div><div id="emptyTextWarning" class="empty-text-warning hidden">未检测到可选的文字层。这可能是扫描版 PDF；此版本可以添加新文字，但无法直接选中图片中的文字。</div></div><aside class="properties"><div class="property-top"><strong>文字属性</strong><span id="propertyStatus">无选中项目</span></div><div id="noSelection" class="no-selection"><div class="selection-icon"><svg><use href="#ic-pencil"/></svg></div><strong>选择文字进行编辑</strong><p>点击文档里的文字，或者使用「添加文字」工具。</p></div><div id="propertiesForm" class="properties-form hidden"><label for="editText">文字内容</label><textarea id="editText" rows="4" placeholder="输入需要显示的文字"></textarea><div class="input-row"><div><label for="fontSize">字号 (pt)</label><input id="fontSize" type="number" min="5" max="96" step="0.5" value="12" /></div><div><label for="fontFamily">字体近似</label><select id="fontFamily"><option value="Arial, 'Noto Sans SC', sans-serif">Sans / 黑体</option><option value="Georgia, 'Noto Serif SC', serif">Serif / 宋体</option><option value="'Courier New', monospace">Mono / 等宽</option></select></div></div><div class="input-row"><div><label for="fontColor">文字颜色</label><input id="fontColor" type="color" value="#222222" /></div><div><label for="backgroundColor">遮盖底色</label><input id="backgroundColor" type="color" value="#ffffff" /></div></div><p class="property-note" id="matchNote">原字会以色块遮盖，并在同一位置绘制新字。复杂背景、特殊字体可能有差异。</p><button class="apply-btn" id="applyEdit"><svg><use href="#ic-check"/></svg> 应用修改</button><button class="delete-btn" id="deleteEdit"><svg><use href="#ic-trash"/></svg> 移除此编辑</button></div><div class="property-footer"><svg><use href="#ic-shield"/></svg><span>所有改动仅在浏览器中，点击「保存 PDF」后才导出。</span></div></aside></div>
+      </section>
+
+      <section class="converter hidden" id="converter"><div class="converter-head"><span class="converter-kicker">DOCUMENT CONVERTER</span><h2 id="converterTitle">PDF 转 Word</h2><p id="converterDescription">将可选择的文字提取成可编辑的 Word 文档。</p></div><div class="convert-drop" id="convertDrop" tabindex="0" role="button"><span class="convert-graphic"><svg><use href="#ic-layers"/></svg></span><h3 id="convertDropTitle">上传 PDF 文件</h3><p id="convertHelp">拖动文件到此处，或者点击选择</p><button id="convertChoose">选择文件 <svg><use href="#ic-arrow"/></svg></button></div><div class="converter-notice"><svg><use href="#ic-shield"/></svg><div><strong>关于转换保真度</strong><p id="converterNotice">文字将被提取为可编辑内容，但复杂布局、表格和图片无法保证与原 PDF 完全一致。</p></div></div></section>
+      <footer class="mobile-footer">PaperForge · 本地处理 · Free Beta</footer>
+    </div>
+  </div>
+
+  <div id="modalOverlay" class="modal-overlay hidden"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><button class="modal-close" id="closeModal" aria-label="关闭"><svg><use href="#ic-close"/></svg></button><div class="modal-icon"><svg><use href="#ic-link"/></svg></div><h3 id="modalTitle">通过 URL 打开 PDF</h3><p>粘贴可公开访问的 PDF 直链。对方网站必须允许浏览器跨域读取（CORS）。</p><label for="urlInput">PDF 地址</label><input type="url" id="urlInput" placeholder="https://example.com/document.pdf" /><button class="modal-confirm" id="loadUrl">打开文档 <svg><use href="#ic-arrow"/></svg></button></div></div>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <input id="fileInput" class="hidden" type="file" accept=".pdf,application/pdf" />
+  <input id="wordInput" class="hidden" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+  <script src="./vendor/pdf-lib.min.js"></script>
+  <script src="./vendor/docx.iife.js"></script>
+  <script src="./vendor/jszip.min.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
