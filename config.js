@@ -1,5 +1,5 @@
 // Public, browser-safe Supabase configuration.
-// Fill in your PROJECT URL and PUBLISHABLE/ANON key from Supabase Dashboard.
+// Supabase PROJECT URL and PUBLISHABLE key supplied by the PaperForge owner.
 // NEVER put a service_role key, secret key, password, or private credential here.
 export const PAPERFORGE_CONFIG = Object.freeze({
   supabaseUrl: 'https://ngsriedtuisaothoqhlk.supabase.co',
@@ -7,5 +7,5 @@ export const PAPERFORGE_CONFIG = Object.freeze({
   adminEmail: 'junhaochong5@gmail.com',
   monthlyPrice: 10,
   currency: 'MYR',
-  paymentQrImage: '', // e.g. './assets/payment-qr.png', after QR is supplied
+  paymentQrImage: './assets/duitnow-qr.png', // Touch 'n Go eWallet DuitNow QR provided by owner
 });

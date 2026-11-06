@@ -1,0 +1,24 @@
+/* PaperForge 2.1: conversion modes, signing and scan-friendly editing. */
+.convert-mode{display:flex;gap:12px;margin:25px 0 -20px;text-align:left}
+.convert-mode label{flex:1;cursor:pointer;display:grid;grid-template-columns:18px 1fr;grid-template-rows:auto auto;align-items:start;gap:5px 9px;background:#fff;border:1px solid #e1e4ef;border-radius:12px;padding:15px;color:#35435c}
+.convert-mode label:has(input:checked){border-color:#8d78ef;background:#f9f7ff}
+.convert-mode input{grid-row:1/3;accent-color:#725af5;margin:2px 0}
+.convert-mode strong{font-size:12px}
+.convert-mode small{color:#8895ab;font-size:10px;line-height:1.6}
+.signature-modal{width:min(510px,96vw)}
+.signature-modal #signatureCanvas{display:block;touch-action:none;width:100%;height:180px;border:1.5px dashed #b7a9f2;border-radius:10px;cursor:crosshair;background:#fff}
+.signature-modal p{margin-bottom:13px}
+.signature-modal p:last-child{margin:12px 0 0;font-size:10px}
+.signature-actions{display:flex;gap:10px;margin-top:13px}
+.signature-actions button{border:1px solid #dce0eb;border-radius:8px;padding:11px;flex:1;background:#fff;color:#48556b;font-weight:700}
+.signature-actions button:last-child{background:#725af5;border-color:#725af5;color:#fff}
+.signature-patch{background:transparent!important;display:flex;align-items:center}
+.signature-patch img{display:block;width:100%;height:100%;pointer-events:none;object-fit:contain}
+.signature-property{font-size:11px;color:#67758b;line-height:1.7}
+.signature-property input{display:block;width:100%;accent-color:#725af5}
+.signature-property span{display:block;margin:0 0 8px}
+#textPropertyFields{display:flex;flex-direction:column;gap:10px}
+.page-wrap.signing{cursor:crosshair}
+.page-wrap.signing .text-hit{pointer-events:none}
+.payment-qr{width:min(340px,100%)!important;height:auto!important;max-height:480px!important;object-fit:contain!important;padding:5px!important;display:block!important}
+@media(max-width:800px){.convert-mode{flex-direction:column}.editor-toolbar{flex-wrap:wrap}.tool-group:first-child{flex-wrap:wrap}}

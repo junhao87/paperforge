@@ -11,6 +11,8 @@ class Membership {
   profile = null;
   initialized = false;
   configuring = false;
+  connecting = false;
+  connectError = '';
   pendingRequests = [];
 
   async init() {
@@ -22,8 +24,33 @@ class Membership {
       this.initialized = true;
       return;
     }
+    await this.connectClient();
+  }
+
+  async connectClient() {
+    if (this.connecting || this.client) return;
+    this.connecting = true;
+    this.connectError = '';
+    this.refreshLoginDialog();
     try {
-      const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+      const sources = [
+        'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm',
+        'https://esm.sh/@supabase/supabase-js@2?bundle',
+      ];
+      let sdk;
+      let previousError;
+      for (const source of sources) {
+        try {
+          sdk = await Promise.race([
+            import(/* @vite-ignore */ source),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('连接超时')), 12000)),
+          ]);
+          if (sdk?.createClient) break;
+          throw new Error('SDK 模块无效');
+        } catch (error) { previousError = error; }
+      }
+      if (!sdk?.createClient) throw previousError || new Error('SDK 无法加载');
+      const { createClient } = sdk;
       this.client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
         auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true },
       });
@@ -38,11 +65,18 @@ class Membership {
       });
     } catch (error) {
       console.error('Supabase setup:', error);
+      this.connectError = error.message || '未知网络错误';
       this.notify(`登录服务未能连接：${error.message}`, true);
     } finally {
+      this.connecting = false;
       this.initialized = true;
       this.renderHeader();
+      this.refreshLoginDialog();
     }
+  }
+
+  refreshLoginDialog() {
+    if (!$('memberOverlay')?.classList.contains('hidden') && $('memberHeading')?.textContent === '登录你的工作空间') this.showLogin();
   }
 
   notify(message, error = false) {
@@ -89,6 +123,7 @@ class Membership {
       if (!target) return;
       const action = target.dataset.action;
       if (action === 'login') await this.signIn();
+      if (action === 'retry-login') await this.connectClient();
       if (action === 'logout') await this.signOut();
       if (action === 'submit-payment') await this.submitPayment();
     });
@@ -142,9 +177,13 @@ class Membership {
   }
 
   showLogin() {
-    const message = !this.configuring ? '尚未完成 Supabase 配置。管理员需先把 Project URL 与 Publishable Key 填入 config.js。' : !this.client ? '登录服务正在连接或暂时无法使用，请稍后重试。' : '使用 Google 账号登录，即可获得 1 次免费成功导出额度。';
+    const message = !this.configuring ? '尚未完成 Supabase 配置。管理员需先把 Project URL 与 Publishable Key 填入 config.js。'
+      : this.client ? '使用 Google 账号登录，即可获得 1 次免费成功导出额度。'
+      : this.connecting ? '正在建立安全登录连接，通常需要几秒钟。连接成功后按钮会自动启用。'
+      : `登录组件无法加载：${this.connectError || '网络问题'}。请点击「重试连接」，或关闭广告拦截器后再试。`;
     $('memberBody').innerHTML = `<div class="member-hero"><span class="member-hero-icon">${icon('shield')}</span><small>WELCOME TO PAPERFORGE</small><h2 id="memberHeading">登录你的工作空间</h2><p>${esc(message)}</p></div>
       <button class="google-btn" data-action="login" ${!this.client ? 'disabled' : ''}><span class="google-g">G</span> 使用 Google 账号继续</button>
+      ${!this.client && !this.connecting && this.configuring ? '<button class="signout-btn" data-action="retry-login">重试连接登录服务</button>' : ''}
       <div class="member-trust">${icon('check')} 免费 1 次导出　·　${icon('check')} 无需设置密码</div>`;
     $('adminOverlay').classList.add('hidden');
     $('memberOverlay').classList.remove('hidden');

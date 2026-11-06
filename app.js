@@ -16,7 +16,7 @@ const pdfAssetOptions = {
 const state = {
   name: '', bytes: null, pdf: null, textPages: [], patchList: [], undoStack: [],
   selected: null, tool: 'edit', zoom: 1, renderId: 0, view: 'home',
-  converter: 'pdf-word', busy: false, ocrPages: new Map(),
+  converter: 'pdf-word', busy: false, ocrPages: new Map(), signatureData: null,
 };
 
 const formatBytes = (n) => n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -79,10 +79,11 @@ function configureConverter(kind) {
   state.converter = kind;
   const isPdf = kind === 'pdf-word';
   $('converterTitle').textContent = isPdf ? 'PDF 转 Word' : 'Word 转 PDF';
-  $('converterDescription').textContent = isPdf ? '提取 PDF 中的文字，生成可编辑的 Word 文档。' : '把 DOCX 的段落文字转换成 PDF，适合简单文档。';
+  $('converterDescription').textContent = isPdf ? '选择保留原版面或提取可编辑文字。' : '保留常见段落样式、字体大小和对齐；复杂 Word 仍有差异。';
   $('convertDropTitle').textContent = isPdf ? '上传 PDF 文件' : '上传 Word 文件';
-  $('convertHelp').textContent = isPdf ? '支持可选择文字的 PDF · 不含 OCR' : '支持 .docx · 保留段落与基本标题';
-  $('converterNotice').textContent = isPdf ? '这是文字提取，不是逐像素还原：多栏、表格、图片、扫描文字可能丢失或错位。' : '纯浏览器转换支持简单 DOCX。复杂表格、页眉页脚、图片及原始 Word 字体不会完整保留；专业级排版建议使用 LibreOffice 后端。';
+  $('convertHelp').textContent = isPdf ? '支持数字 PDF 和扫描 PDF · 保真模式不需要 OCR' : '支持 .docx · 简单布局更准确';
+  $('pdfModeOptions').classList.toggle('hidden', !isPdf);
+  $('converterNotice').textContent = isPdf ? '保真模式：Word 每页为图片，视觉一致但文字无法编辑；可编辑模式：保留文字，复杂表格、图片和位置可能变化。' : '没有 Word / LibreOffice 排版引擎的纯浏览器转换不可能与 Word 逐页完全一致；复杂合同建议从原 DOCX 在 Word 中导出 PDF。';
   view('converter');
 }
 
@@ -99,6 +100,7 @@ async function openPdf(bytes, name) {
   state.selected = null;
   state.textPages = [];
   state.ocrPages = new Map();
+  state.signatureData = null;
   state.zoom = 1;
   $('zoomValue').textContent = '100%';
   $('currentDocument').innerHTML = `<div class="doc-icon">${svg('file')}</div><div><strong title="${escapeAttr(name)}">${escapeHtml(name)}</strong><small>${pdf.numPages} 页 · ${formatBytes(raw.byteLength)}</small></div>`;
@@ -156,6 +158,7 @@ async function renderPages() {
   $('pageStack').replaceChildren();
   $('thumbs').replaceChildren();
   let foundText = 0;
+  let sparsePages = 0;
   for (let index = 0; index < state.pdf.numPages; index++) {
     if (renderId !== state.renderId) return;
     const page = await state.pdf.getPage(index + 1);
@@ -191,6 +194,8 @@ async function renderPages() {
     try { textContent = await page.getTextContent(); } catch { textContent = { items: [], styles: {} }; }
     state.textPages[index] = textContent;
     const scale = PAGE_SCALE * state.zoom;
+    const usefulItems = textContent.items.filter((item) => item.str?.trim()).length;
+    if (usefulItems < 12) sparsePages++;
     for (const item of textContent.items) {
       if (!item.str || !item.str.trim()) continue;
       foundText++;
@@ -227,11 +232,23 @@ async function renderPages() {
       hitLayer.append(hit);
     }
     wrapper.addEventListener('click', (event) => {
-      if (state.tool !== 'add') return;
+      if (!['add', 'sign'].includes(state.tool)) return;
       const rect = wrapper.getBoundingClientRect();
       const x = clamp((event.clientX - rect.left) / scale, 0, viewport.width / scale - 5);
       const y = clamp((event.clientY - rect.top) / scale, 0, viewport.height / scale - 10);
       snapshot();
+      if (state.tool === 'sign') {
+        const signed = state.signatureData;
+        if (!signed) return setTool('edit');
+        const width = Math.min(170, viewport.width / scale - x);
+        const height = width * signed.height / signed.width;
+        const patch = { id: newId(), kind: 'signature', page: index, x, y: Math.min(y, viewport.height / scale - height), width, height, image: signed.image, ratio: signed.height / signed.width };
+        state.patchList.push(patch);
+        renderPatches();
+        selectPatch(patch.id);
+        setTool('edit');
+        return toast('签名已放置，可拖动位置或调整大小；保存 PDF 时会一并导出。');
+      }
       const patch = { id: newId(), kind: 'add', page: index, x, y, width: 95, height: 20, text: '输入新文字', fontSize: 14, fontFamily: 'Arial, "Noto Sans SC", sans-serif', color: '#242c3c', background: '#ffffff', bold: false, italic: false };
       state.patchList.push(patch);
       selectPatch(patch.id);
@@ -245,7 +262,9 @@ async function renderPages() {
     renderPatchesForPage(index);
     if (index % 5 === 4) await wait(0);
   }
-  $('emptyTextWarning').classList.toggle('hidden', foundText > 0);
+  const sparse = sparsePages > 0;
+  $('emptyTextWarning').classList.toggle('hidden', !sparse);
+  if (sparse && !state.ocrPages.size && state.tool === 'edit') $('editorHint').textContent = `检测到 ${sparsePages} 页文字层较少：扫描件请点「OCR 本页」，再点击识别到的文字区域进行修改。`;
 }
 
 function renderOcrHits(pageIndex) {
@@ -330,7 +349,7 @@ async function ocrVisiblePage() {
     if (!hits.length) return toast('未检测到可识别的文字。可尝试更清晰的扫描件。', true);
     state.ocrPages.set(pageIndex, hits);
     renderOcrHits(pageIndex);
-    $('emptyTextWarning').classList.add('hidden');
+    if (state.ocrPages.size >= state.pdf.numPages) $('emptyTextWarning').classList.add('hidden');
     toast(`第 ${pageIndex + 1} 页 OCR 完成：识别 ${hits.length} 个文字区域，点击紫色区域进行校对和修改。`);
   } catch (error) {
     console.error(error);
@@ -363,8 +382,9 @@ function setTool(tool) {
   state.tool = tool;
   $('selectTool').classList.toggle('selected', tool === 'edit');
   $('addTool').classList.toggle('selected', tool === 'add');
-  document.querySelectorAll('.page-wrap').forEach((el) => el.classList.toggle('adding', tool === 'add'));
-  $('editorHint').textContent = tool === 'add' ? '现在点击 PDF 空白位置，即可添加文字' : '点击 PDF 上的文字即可修改 · 选择「添加文字」后点击页面可插入新文字';
+  $('signatureTool').classList.toggle('selected', tool === 'sign');
+  document.querySelectorAll('.page-wrap').forEach((el) => { el.classList.toggle('adding', tool === 'add'); el.classList.toggle('signing', tool === 'sign'); });
+  $('editorHint').textContent = tool === 'add' ? '点击 PDF 空白位置，即可添加文字' : tool === 'sign' ? '点击 PDF 页面放置手写签名，之后可拖动和缩放' : '点击文字修改 · 扫描件先执行 OCR 本页 · 签名请选择「手写签名」';
 }
 
 function familyForPdf(name = '') {
@@ -408,8 +428,15 @@ function selectPatch(id) {
   const patch = state.patchList.find((item) => item.id === id);
   if (!patch) return;
   state.selected = { kind: 'patch', id };
-  showProperties(patch);
-  $('propertyStatus').textContent = patch.kind === 'replace' ? '文字替换' : '新增文字';
+  if (patch.kind === 'signature') {
+    $('noSelection').classList.add('hidden');
+    $('propertiesForm').classList.remove('hidden');
+    $('textPropertyFields').classList.add('hidden');
+    $('signaturePropertyFields').classList.remove('hidden');
+    $('signatureWidth').value = Math.round(patch.width);
+    $('signatureSizeValue').textContent = `${Math.round(patch.width)} pt`;
+  } else showProperties(patch);
+  $('propertyStatus').textContent = patch.kind === 'signature' ? '手写签名' : patch.kind === 'replace' ? '文字替换' : '新增文字';
   $('deleteEdit').classList.remove('hidden');
   document.querySelectorAll('.patch-item').forEach((node) => node.classList.toggle('active', node.dataset.patch === id));
 }
@@ -425,6 +452,8 @@ function clearSelection() {
 function showProperties(item) {
   $('noSelection').classList.add('hidden');
   $('propertiesForm').classList.remove('hidden');
+  $('textPropertyFields').classList.remove('hidden');
+  $('signaturePropertyFields').classList.add('hidden');
   $('editText').value = item.text;
   $('fontSize').value = (item.fontSize || 12).toFixed(1).replace(/\.0$/, '');
   const selector = $('fontFamily');
@@ -451,6 +480,7 @@ function snapshot() {
 
 function applyEdit() {
   if (!state.selected) return;
+  if (state.selected.kind === 'patch' && state.patchList.find((patch) => patch.id === state.selected.id)?.kind === 'signature') return;
   const text = $('editText').value;
   const fontSize = clamp(Number($('fontSize').value) || 12, 5, 96);
   const props = { text, fontSize, fontFamily: $('fontFamily').value, color: $('fontColor').value, background: $('backgroundColor').value, bold: $('fontBold').checked, italic: $('fontItalic').checked };
@@ -506,12 +536,22 @@ function renderPatchesForPage(pageIndex) {
     el.style.top = `${patch.y * scale}px`;
     el.style.minWidth = `${patch.kind === 'replace' ? patch.width * scale : 10}px`;
     el.style.minHeight = `${patch.height * scale}px`;
-    el.style.backgroundColor = patch.kind === 'replace' ? patch.background : 'transparent';
-    el.style.color = patch.color;
-    el.style.font = `${patch.italic ? 'italic' : 'normal'} ${patch.bold ? '700' : '400'} ${patch.fontSize * scale}px ${patch.fontFamily}`;
-    const text = document.createElement('span');
-    text.textContent = patch.text;
-    el.append(text);
+    if (patch.kind === 'signature') {
+      el.classList.add('signature-patch');
+      el.style.width = `${patch.width * scale}px`;
+      el.style.height = `${patch.height * scale}px`;
+      const img = document.createElement('img');
+      img.src = patch.image;
+      img.alt = '手写签名';
+      el.append(img);
+    } else {
+      el.style.backgroundColor = patch.kind === 'replace' ? patch.background : 'transparent';
+      el.style.color = patch.color;
+      el.style.font = `${patch.italic ? 'italic' : 'normal'} ${patch.bold ? '700' : '400'} ${patch.fontSize * scale}px ${patch.fontFamily}`;
+      const text = document.createElement('span');
+      text.textContent = patch.text;
+      el.append(text);
+    }
     el.addEventListener('click', (e) => { e.stopPropagation(); selectPatch(patch.id); });
     el.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
@@ -561,6 +601,73 @@ function rasterizeText(text, size, family, color, bold = false, italic = false) 
   return { data: canvas.toDataURL('image/png'), width: widthPt, height: heightPt };
 }
 
+function setupSignaturePad() {
+  const canvas = $('signatureCanvas');
+  const ctx = canvas.getContext('2d');
+  let last = null;
+  let hasInk = false;
+  const coordinates = (event) => {
+    const bounds = canvas.getBoundingClientRect();
+    return { x: (event.clientX - bounds.left) * canvas.width / bounds.width,
+      y: (event.clientY - bounds.top) * canvas.height / bounds.height };
+  };
+  const clear = () => { ctx.clearRect(0, 0, canvas.width, canvas.height); hasInk = false; last = null; };
+  canvas.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 && event.pointerType === 'mouse') return;
+    event.preventDefault(); canvas.setPointerCapture(event.pointerId);
+    last = coordinates(event); hasInk = true;
+    ctx.fillStyle = '#171d30'; ctx.beginPath(); ctx.arc(last.x, last.y, 1.8, 0, Math.PI * 2); ctx.fill();
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!last) return;
+    event.preventDefault(); const next = coordinates(event);
+    ctx.beginPath(); ctx.strokeStyle = '#171d30'; ctx.lineWidth = 3.5;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.moveTo(last.x, last.y); ctx.lineTo(next.x, next.y); ctx.stroke();
+    last = next;
+  });
+  const finish = () => { last = null; };
+  canvas.addEventListener('pointerup', finish);
+  canvas.addEventListener('pointercancel', finish);
+  $('clearSignature').onclick = clear;
+  $('signatureTool').onclick = () => { if (!state.pdf) return; clear(); $('signatureOverlay').classList.remove('hidden'); };
+  const close = () => $('signatureOverlay').classList.add('hidden');
+  $('closeSignature').onclick = close;
+  $('signatureOverlay').onclick = (event) => { if (event.target === $('signatureOverlay')) close(); };
+  $('useSignature').onclick = () => {
+    if (!hasInk) return toast('请先在签名板上手写签名。', true);
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
+    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+      if (image.data[(y * canvas.width + x) * 4 + 3] < 24) continue;
+      minX = Math.min(x, minX); maxX = Math.max(x, maxX);
+      minY = Math.min(y, minY); maxY = Math.max(y, maxY);
+    }
+    const padding = 8;
+    minX = Math.max(0, minX - padding); minY = Math.max(0, minY - padding);
+    const width = Math.min(canvas.width - minX, maxX - minX + padding * 2);
+    const height = Math.min(canvas.height - minY, maxY - minY + padding * 2);
+    const cropped = document.createElement('canvas'); cropped.width = width; cropped.height = height;
+    cropped.getContext('2d').drawImage(canvas, minX, minY, width, height, 0, 0, width, height);
+    state.signatureData = { image: cropped.toDataURL('image/png'), width, height };
+    close(); setTool('sign');
+    toast('已准备好签名。请点击文档需要签名的位置。');
+  };
+  $('signatureWidth').oninput = (event) => {
+    const patch = state.patchList.find((p) => p.id === state.selected?.id && p.kind === 'signature');
+    if (!patch) return;
+    const width = Number(event.target.value);
+    if (width < 20) return;
+    if (!patch._resizing) { snapshot(); patch._resizing = true; }
+    patch.width = width; patch.height = width * patch.ratio;
+    $('signatureSizeValue').textContent = `${width} pt`;
+    renderPatches();
+  };
+  $('signatureWidth').addEventListener('change', () => {
+    const patch = state.patchList.find((p) => p.id === state.selected?.id);
+    if (patch) delete patch._resizing;
+  });
+}
+
 async function exportPdf() {
   if (!state.bytes || state.busy) return;
   if (!membership.guardUse()) return;
@@ -570,6 +677,11 @@ async function exportPdf() {
     for (const patch of state.patchList) {
       const page = pdf.getPage(patch.page);
       const pageHeight = page.getHeight();
+      if (patch.kind === 'signature') {
+        const png = await pdf.embedPng(patch.image);
+        page.drawImage(png, { x: patch.x, y: pageHeight - patch.y - patch.height, width: patch.width, height: patch.height });
+        continue;
+      }
       if (patch.kind === 'replace') {
         const hex = patch.background.replace('#', '');
         page.drawRectangle({ x: patch.x - .75, y: pageHeight - patch.y - patch.height - 1.5, width: patch.width + 1.5, height: patch.height + 2.5, color: rgb(parseInt(hex.slice(0, 2), 16) / 255, parseInt(hex.slice(2, 4), 16) / 255, parseInt(hex.slice(4, 6), 16) / 255) });
@@ -599,13 +711,33 @@ function groupTextLines(items) {
 
 async function pdfToWord(file) {
   try {
-    busy(true, '正在提取 PDF 文字并生成 DOCX…');
+    const mode = document.querySelector('input[name="pdfMode"]:checked')?.value || 'visual';
+    busy(true, mode === 'visual' ? '正在逐页渲染 PDF，以原版面制作 Word…' : '正在提取 PDF 文字并生成可编辑 DOCX…');
     const bytes = new Uint8Array(await file.arrayBuffer());
     const input = await pdfjsLib.getDocument({ data: bytes, ...pdfAssetOptions }).promise;
     const paragraphs = [];
     let chars = 0;
+    let pdfWidth = 595.28, pdfHeight = 841.89;
     for (let i = 1; i <= input.numPages; i++) {
       const page = await input.getPage(i);
+      if (mode === 'visual') {
+        const size = page.getViewport({ scale: 1 });
+        if (i === 1) { pdfWidth = size.width; pdfHeight = size.height; }
+        const renderViewport = page.getViewport({ scale: 1.65 });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(renderViewport.width); canvas.height = Math.round(renderViewport.height);
+        await page.render({ canvasContext: canvas.getContext('2d'), canvas, viewport: renderViewport }).promise;
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', .91));
+        if (!blob) throw new Error('无法生成文档页面图像');
+        const image = new Uint8Array(await blob.arrayBuffer());
+        const viewWidthPx = (pdfWidth - 11) * 96 / 72;
+        const viewHeightPx = viewWidthPx * size.height / size.width;
+        paragraphs.push(new window.docx.Paragraph({
+          children: [new window.docx.ImageRun({ type: 'jpg', data: image, transformation: { width: viewWidthPx, height: viewHeightPx } })],
+          spacing: { before: 0, after: 0 }, pageBreakBefore: i > 1,
+        }));
+        continue;
+      }
       const content = await page.getTextContent();
       const lines = groupTextLines(content.items);
       if (i > 1) paragraphs.push(new window.docx.Paragraph({ text: '', pageBreakBefore: true }));
@@ -614,73 +746,171 @@ async function pdfToWord(file) {
         paragraphs.push(new window.docx.Paragraph({ children: [new window.docx.TextRun({ text: line, size: 22 })], spacing: { after: 80 } }));
       }
     }
-    if (!chars) throw new Error('未检测到可复制的文字。请先在 PDF 编辑器使用「OCR 本页」识别扫描文字；目前 OCR 识别结果尚不能自动转换进 Word。');
-    const wordDoc = new window.docx.Document({ sections: [{ properties: {}, children: paragraphs }] });
+    if (mode !== 'visual' && !chars) throw new Error('未检测到可复制的文字。请选择「保真模式」保留扫描 PDF 的页面外观。');
+    const wordDoc = new window.docx.Document({ sections: [{ properties: mode === 'visual' ? {
+      page: { size: { width: Math.round(pdfWidth * 20), height: Math.round(pdfHeight * 20) },
+        margin: { left: 90, right: 90, top: 90, bottom: 90 } },
+    } : {}, children: paragraphs }] });
     const blob = await window.docx.Packer.toBlob(wordDoc);
     if (!await membership.authorizeExport('pdf_to_word')) return;
-    downloadBlob(blob, `${safeFileName(file.name)}.docx`);
-    toast(`Word 文档已导出 · 提取 ${chars} 个字符`);
+    downloadBlob(blob, `${safeFileName(file.name)}_${mode === 'visual' ? '保真版' : '文字可编辑版'}.docx`);
+    toast(mode === 'visual' ? `已生成 ${input.numPages} 页版面保真 Word（内容为图片，不可直接修改文字）。` : `Word 文档已导出 · 提取 ${chars} 个字符，复杂排版可能改变。`);
   } catch (error) { console.error(error); toast(`PDF 转 Word 失败：${error.message}`, true); }
   finally { busy(false); }
 }
 
-function parseDocxParagraphs(xmlString) {
-  const dom = new DOMParser().parseFromString(xmlString, 'application/xml');
-  if (dom.querySelector('parsererror')) throw new Error('DOCX XML 无法解析');
-  const paragraphs = Array.from(dom.getElementsByTagNameNS('*', 'p'));
-  return paragraphs.map((node) => {
-    const text = Array.from(node.getElementsByTagNameNS('*', 't')).map((span) => span.textContent).join('');
-    const styleNode = node.getElementsByTagNameNS('*', 'pStyle')[0];
-    const style = styleNode?.getAttribute('w:val') || styleNode?.getAttribute('val') || '';
-    return { text, heading: /Heading|Title|标题/i.test(style) };
-  });
+function wordChildren(node, localName) {
+  return node ? [...node.children].filter((el) => el.localName === localName) : [];
+}
+
+function wordFirst(node, localName) {
+  return node?.getElementsByTagNameNS('*', localName)[0] || null;
+}
+
+function wordAttr(node, name, fallback = '') {
+  return node?.getAttribute('w:' + name) ?? node?.getAttribute(name) ?? fallback;
+}
+
+function extractWordParagraph(node) {
+  const props = wordChildren(node, 'pPr')[0];
+  const style = wordAttr(wordFirst(props, 'pStyle'), 'val');
+  const heading = /Heading|Title|标题/i.test(style);
+  const alignment = wordAttr(wordFirst(props, 'jc'), 'val', 'left');
+  const spacing = wordFirst(props, 'spacing');
+  const indent = wordFirst(props, 'ind');
+  const runs = [];
+  let pageBreak = false;
+  for (const child of [...node.children]) {
+    if (child.localName !== 'r') continue;
+    if ([...child.getElementsByTagNameNS('*', 'br')].some((br) => wordAttr(br, 'type') === 'page')) pageBreak = true;
+    const rpr = wordChildren(child, 'rPr')[0];
+    const rawText = [...child.getElementsByTagNameNS('*', 't')].map((t) => t.textContent).join('');
+    const tabs = child.getElementsByTagNameNS('*', 'tab').length;
+    const text = rawText + (tabs ? '    '.repeat(tabs) : '');
+    if (!text) continue;
+    const font = wordFirst(rpr, 'rFonts');
+    const fontName = wordAttr(font, 'ascii') || wordAttr(font, 'eastAsia');
+    const fontSizeHalfPoints = Number(wordAttr(wordFirst(rpr, 'sz'), 'val'));
+    const rawColor = wordAttr(wordFirst(rpr, 'color'), 'val');
+    const color = /^[a-f\d]{6}$/i.test(rawColor) ? '#' + rawColor : '#222222';
+    const bold = Boolean(wordFirst(rpr, 'b'));
+    const italic = Boolean(wordFirst(rpr, 'i'));
+    runs.push({ text, fontSize: fontSizeHalfPoints > 0 ? fontSizeHalfPoints / 2 : heading ? 17 : 11,
+      family: fontName ? `"${fontName.replace(/["\\]/g, '')}", Arial, "Noto Sans SC", sans-serif` : 'Arial, "Noto Sans SC", sans-serif', color, bold, italic });
+  }
+  return { runs, alignment, heading, pageBreak: pageBreak || Boolean(wordFirst(props, 'pageBreakBefore')),
+    indent: Number(wordAttr(indent, 'left')) / 20 || 0,
+    after: Number(wordAttr(spacing, 'after')) / 20 || (heading ? 8 : 4),
+    before: Number(wordAttr(spacing, 'before')) / 20 || 0 };
+}
+
+function wordWrapRuns(runs, maxWidth, measure) {
+  const lines = [];
+  let line = [], lineWidth = 0;
+  for (const run of runs) {
+    measure.font = `${run.italic ? 'italic ' : ''}${run.bold ? 'bold ' : ''}${run.fontSize}px ${run.family}`;
+    for (const char of run.text) {
+      const width = measure.measureText(char).width;
+      if (lineWidth + width > maxWidth && lineWidth > 0) { lines.push(line); line = []; lineWidth = 0; }
+      const existing = line[line.length - 1];
+      if (existing?.style === run) { existing.text += char; existing.width += width; }
+      else line.push({ style: run, text: char, width });
+      lineWidth += width;
+    }
+  }
+  lines.push(line);
+  return lines;
 }
 
 async function wordToPdf(file) {
   try {
-    busy(true, '正在转换 DOCX 段落…');
+    busy(true, '正在读取 Word 布局、文字属性和表格…');
     const archive = await window.JSZip.loadAsync(await file.arrayBuffer());
     const wordXml = archive.file('word/document.xml');
     if (!wordXml) throw new Error('不是有效的 DOCX 文件');
-    const paragraphs = parseDocxParagraphs(await wordXml.async('string'));
+    const dom = new DOMParser().parseFromString(await wordXml.async('string'), 'application/xml');
+    if (dom.querySelector('parsererror')) throw new Error('DOCX XML 无法解析');
+    const body = wordFirst(dom, 'body');
+    const sect = wordFirst(body, 'sectPr');
+    const pageSize = wordFirst(sect, 'pgSz');
+    const margins = wordFirst(sect, 'pgMar');
+    const width = (Number(wordAttr(pageSize, 'w')) || 11906) / 20;
+    const height = (Number(wordAttr(pageSize, 'h')) || 16838) / 20;
+    const left = Math.max(20, (Number(wordAttr(margins, 'left')) || 900) / 20);
+    const right = Math.max(20, (Number(wordAttr(margins, 'right')) || 900) / 20);
+    const top = Math.max(20, (Number(wordAttr(margins, 'top')) || 1000) / 20);
+    const bottom = Math.max(20, (Number(wordAttr(margins, 'bottom')) || 900) / 20);
     const pdf = await PDFDocument.create();
-    const width = 595.28, height = 841.89, left = 47, top = 55, bottom = 50;
     let page = pdf.addPage([width, height]);
     let cursorY = height - top;
     let count = 0;
     const measure = document.createElement('canvas').getContext('2d');
-    for (const para of paragraphs) {
-      const size = para.heading ? 17 : 11;
-      const family = para.heading ? 'bold 17px Arial, "Noto Sans SC", sans-serif' : '11px Arial, "Noto Sans SC", sans-serif';
-      measure.font = family;
-      const maxWidth = width - left * 2;
-      const tokens = Array.from(para.text || '');
-      const lines = [];
-      let line = '';
-      for (const ch of tokens) {
-        if (measure.measureText(line + ch).width > maxWidth && line) { lines.push(line); line = ch; }
-        else line += ch;
-      }
-      if (line) lines.push(line);
-      if (!lines.length) lines.push('');
-      const step = size * 1.5;
-      for (const row of lines) {
-        if (cursorY - step < bottom) { page = pdf.addPage([width, height]); cursorY = height - top; }
-        if (row) {
-          const raster = rasterizeText(row, size, 'Arial, "Noto Sans SC", sans-serif', '#222222');
+    const newPage = () => { page = pdf.addPage([width, height]); cursorY = height - top; };
+    const renderParagraph = async (para, x = left, available = width - left - right) => {
+      if (para.pageBreak && cursorY < height - top - 8) newPage();
+      cursorY -= Math.max(0, para.before);
+      const maxWidth = Math.max(20, available - para.indent);
+      const lines = wordWrapRuns(para.runs, maxWidth, measure);
+      for (const pieces of lines) {
+        const lineHeight = Math.max(12, ...pieces.map((p) => p.style.fontSize * 1.48));
+        if (cursorY - lineHeight < bottom) newPage();
+        const visualWidth = pieces.reduce((sum, p) => sum + p.width, 0);
+        let cursorX = x + para.indent;
+        if (para.alignment === 'center') cursorX += (maxWidth - visualWidth) / 2;
+        else if (para.alignment === 'right') cursorX += maxWidth - visualWidth;
+        for (const part of pieces) {
+          const s = part.style;
+          const raster = rasterizeText(part.text, s.fontSize, s.family, s.color, s.bold, s.italic);
           const image = await pdf.embedPng(raster.data);
-          page.drawImage(image, { x: left, y: cursorY - raster.height, width: raster.width, height: raster.height });
-          count += row.length;
+          page.drawImage(image, { x: cursorX, y: cursorY - raster.height, width: raster.width, height: raster.height });
+          cursorX += part.width;
+          count += part.text.length;
         }
-        cursorY -= step;
+        cursorY -= lineHeight;
       }
-      cursorY -= para.heading ? 10 : 5;
+      cursorY -= para.after;
+    };
+    for (const block of [...body.children]) {
+      if (block.localName === 'p') {
+        await renderParagraph(extractWordParagraph(block));
+      } else if (block.localName === 'tbl') {
+        const rows = wordChildren(block, 'tr');
+        for (const row of rows) {
+          const cells = wordChildren(row, 'tc');
+          if (!cells.length) continue;
+          const cellWidth = (width - left - right) / cells.length;
+          const parsed = cells.map((cell) => wordChildren(cell, 'p').map(extractWordParagraph));
+          const lineGroups = parsed.map((paragraphs) => paragraphs.flatMap((p) => wordWrapRuns(p.runs, cellWidth - 12, measure)));
+          const rowHeight = Math.max(25, ...lineGroups.map((lines) => lines.reduce((sum, line) => sum + Math.max(12, ...line.map((part) => part.style.fontSize * 1.45)), 8)));
+          if (cursorY - rowHeight < bottom) newPage();
+          for (let c = 0; c < cells.length; c++) {
+            const x = left + cellWidth * c;
+            page.drawRectangle({ x, y: cursorY - rowHeight, width: cellWidth, height: rowHeight, borderWidth: .5, borderColor: rgb(.73, .76, .82) });
+            let rowCursor = cursorY - 5;
+            for (const line of lineGroups[c]) {
+              const lineHeight = Math.max(12, ...line.map((part) => part.style.fontSize * 1.45));
+              let position = x + 6;
+              for (const part of line) {
+                const s = part.style;
+                const raster = rasterizeText(part.text, s.fontSize, s.family, s.color, s.bold, s.italic);
+                const image = await pdf.embedPng(raster.data);
+                page.drawImage(image, { x: position, y: rowCursor - raster.height, width: raster.width, height: raster.height });
+                position += part.width;
+                count += part.text.length;
+              }
+              rowCursor -= lineHeight;
+            }
+          }
+          cursorY -= rowHeight;
+        }
+        cursorY -= 7;
+      }
     }
     if (!count) throw new Error('DOCX 没有可识别的文字');
     const result = await pdf.save();
     if (!await membership.authorizeExport('word_to_pdf')) return;
     downloadBlob(new Blob([result], { type: 'application/pdf' }), `${safeFileName(file.name)}.pdf`);
-    toast(`Word 已转换为 ${pdf.getPageCount()} 页 PDF（简化排版）`);
+    toast(`Word 已转换为 ${pdf.getPageCount()} 页 PDF（基本段落样式与表格）；复杂布局仍需 Word 原生引擎。`);
   } catch (error) { console.error(error); toast(`Word 转 PDF 失败：${error.message}`, true); }
   finally { busy(false); }
 }
@@ -708,6 +938,7 @@ function showUrlModal() {
 }
 
 function init() {
+  setupSignaturePad();
   const converterPdfInput = document.createElement('input');
   converterPdfInput.type = 'file';
   converterPdfInput.accept = '.pdf,application/pdf';
@@ -746,12 +977,12 @@ function init() {
   $('zoomIn').onclick = async () => { state.zoom = clamp(Math.round((state.zoom + .2) * 10) / 10, .5, 2.2); $('zoomValue').textContent = `${Math.round(state.zoom * 100)}%`; await renderPages(); };
   $('zoomOut').onclick = async () => { state.zoom = clamp(Math.round((state.zoom - .2) * 10) / 10, .5, 2.2); $('zoomValue').textContent = `${Math.round(state.zoom * 100)}%`; await renderPages(); };
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { $('modalOverlay').classList.add('hidden'); clearSelection(); }
+    if (e.key === 'Escape') { $('modalOverlay').classList.add('hidden'); $('signatureOverlay').classList.add('hidden'); clearSelection(); setTool('edit'); }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) { e.preventDefault(); undo(); }
   });
   attachDrop($('dropzone'), loadPdfFile);
   attachDrop($('convertDrop'), processConverterFile);
-  for (const id of ['topOpen', 'topExport', 'editorExport', 'applyEdit', 'deleteEdit', 'zoomIn', 'zoomOut']) $(id).dataset.busyLock = '1';
+  for (const id of ['topOpen', 'topExport', 'editorExport', 'applyEdit', 'deleteEdit', 'zoomIn', 'zoomOut', 'signatureTool']) $(id).dataset.busyLock = '1';
 }
 
 init();
