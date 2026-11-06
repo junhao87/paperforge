@@ -95,11 +95,11 @@ function configureConverter(kind) {
   state.converter = kind;
   const isPdf = kind === 'pdf-word';
   $('converterTitle').textContent = isPdf ? 'PDF 转 Word' : 'Word 转 PDF';
-  $('converterDescription').textContent = isPdf ? '保真视觉或位置参考文字两种模式；两者无法同时做到完全一致。' : '优先使用增强排版引擎还原 Word 页面，失败时提供基础转换。';
+  $('converterDescription').textContent = isPdf ? '支持原貌图像或固定坐标可编辑文字；复杂合同仍需检查字体与文字框。' : '先用浏览器版面引擎处理 Word；自动分页、特殊字体和复杂表格可能存在差异。';
   $('convertDropTitle').textContent = isPdf ? '上传 PDF 文件' : '上传 Word 文件';
   $('convertHelp').textContent = isPdf ? '支持数字 PDF 和扫描 PDF · 保真模式不需要 OCR' : '支持 .docx · 增强排版首次需要联网加载组件';
   $('pdfModeOptions').classList.toggle('hidden', !isPdf);
-  $('converterNotice').textContent = isPdf ? '保真模式：Word 中每页为图片，视觉最接近原件，但文字无法直接编辑；可编辑模式：尝试保留字体与行的位置，表格、图片、跨页布局可能错位。' : '增强版先按 Word 样式渲染为页面图片，再保存到 PDF；版面通常好于逐段重排，但文字可能无法复制。复杂合同请优先在 Word / WPS / LibreOffice 中原生另存 PDF。';
+  $('converterNotice').textContent = isPdf ? '原貌保真：每页图片，最接近原件但文字不可编辑。固定版式可编辑：文字定位到原坐标，保留图形背景；更改长文本可能溢出，特殊字体或非白底可能略有偏差。' : '当前浏览器转换不能保证 Microsoft Word 的自动分页完全一致；若要求合同原排版一处不变，请在 Microsoft Word 中使用「文件 → 导出 → 创建 PDF」，并安装原字体。';
   view('converter');
 }
 
@@ -376,6 +376,17 @@ function loadTesseract() {
   return tesseractLoader;
 }
 
+async function getOcrWorker() {
+  if (cachedOcrWorker) return cachedOcrWorker;
+  const Tesseract = await loadTesseract();
+  try { cachedOcrWorker = await Tesseract.createWorker(['eng', 'chi_sim'], 1); }
+  catch (languageError) {
+    console.warn('中英 OCR 模型加载失败，降级为英语', languageError);
+    cachedOcrWorker = await Tesseract.createWorker('eng', 1);
+  }
+  return cachedOcrWorker;
+}
+
 // Tesseract 6 returns spatial details only when explicitly requested. Prefer
 // line rectangles so they remain usable on narrow touch screens.
 function mergeOcrWordsIntoLines(boxes) {
@@ -493,6 +504,44 @@ function ocrBoxes(result) {
   return [];
 }
 
+function highContrastOcrCanvas(source) {
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0);
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = image.data;
+  const bins = new Uint32Array(256);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const gray = Math.round(pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114);
+    bins[gray]++;
+  }
+  let lower = 0, upper = 255, total = canvas.width * canvas.height, cumulative = 0;
+  while (lower < 255 && cumulative < total * .015) cumulative += bins[lower++];
+  cumulative = 0;
+  while (upper > lower && cumulative < total * .015) cumulative += bins[upper--];
+  const delta = Math.max(1, upper - lower);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const gray = pixels[i] * .299 + pixels[i + 1] * .587 + pixels[i + 2] * .114;
+    // Contrast stretch preserves fine serifs better than a hard black/white threshold.
+    const adjusted = clamp(Math.round((gray - lower) / delta * 255), 0, 255);
+    pixels[i] = pixels[i + 1] = pixels[i + 2] = adjusted;
+    pixels[i + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
+function nativeTextBoxes(page, content) {
+  return pdfLayoutLines(page, content).filter((line) => line.parts.length).map((line) => {
+    const text = line.parts.map((part) => part.text).join(' ').trim();
+    const right = Math.max(...line.parts.map((part) => part.x + (part.width || part.text.length * part.fontSize * .5)));
+    return { text, x: line.x, y: line.y,
+      w: Math.max(8, right - line.x), h: Math.max(8, line.fontSize * 1.25) };
+  }).filter((line) => line.text);
+}
+
 async function ocrVisiblePage() {
   if (!state.pdf || state.busy) return;
   if (!membership.guardUse()) return;
@@ -509,17 +558,11 @@ async function ocrVisiblePage() {
   button.disabled = true;
   busy(true, `OCR 正在高分辨率扫描第 ${pageIndex + 1} 页（首次需要下载语言模型）…`);
   try {
-    const Tesseract = await loadTesseract();
-    if (!cachedOcrWorker) {
-      try { cachedOcrWorker = await Tesseract.createWorker(['eng', 'chi_sim'], 1); }
-      catch (languageError) {
-        console.warn('中英 OCR 模型加载失败，降级为英语', languageError);
-        cachedOcrWorker = await Tesseract.createWorker('eng', 1);
-      }
-    }
+    const worker = await getOcrWorker();
     const pdfPage = await state.pdf.getPage(pageIndex + 1);
     const natural = pdfPage.getViewport({ scale: 1 });
-    const upscale = Math.min(3, Math.sqrt(10_000_000 / (natural.width * natural.height)));
+    const maxPixels = window.matchMedia('(max-width: 900px)').matches ? 4_000_000 : 10_000_000;
+    const upscale = Math.min(3, Math.sqrt(maxPixels / (natural.width * natural.height)));
     const viewport = pdfPage.getViewport({ scale: upscale });
     const ocrCanvas = document.createElement('canvas');
     ocrCanvas.width = Math.ceil(viewport.width);
@@ -529,8 +572,26 @@ async function ocrVisiblePage() {
     context.fillRect(0, 0, ocrCanvas.width, ocrCanvas.height);
     await pdfPage.render({ canvasContext: context, canvas: ocrCanvas, viewport,
       background: 'rgb(255,255,255)' }).promise;
-    const recognition = await cachedOcrWorker.recognize(ocrCanvas, {}, { text: true, tsv: true, blocks: true, hocr: true });
-    const boxes = ocrBoxes(recognition);
+    const outputs = { text: true, tsv: true, blocks: true, hocr: true };
+    await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' });
+    let recognition = await worker.recognize(ocrCanvas, {}, outputs);
+    let boxes = ocrBoxes(recognition);
+    let sourceCanvas = ocrCanvas;
+    if (!boxes.length) {
+      busy(true, `普通 OCR 未识别到文字，正在尝试高对比度与稀疏文字模式（第 ${pageIndex + 1} 页）…`);
+      sourceCanvas = highContrastOcrCanvas(ocrCanvas);
+      await worker.setParameters({ tessedit_pageseg_mode: '11' });
+      recognition = await worker.recognize(sourceCanvas, {}, outputs);
+      boxes = ocrBoxes(recognition);
+    }
+    if (!boxes.length) {
+      const content = state.textPages[pageIndex] || await pdfPage.getTextContent();
+      const extracted = nativeTextBoxes(pdfPage, content);
+      if (extracted.length) {
+        boxes = extracted.map((box) => ({ ...box, x: box.x * upscale, y: box.y * upscale,
+          w: box.w * upscale, h: box.h * upscale }));
+      }
+    }
     const hits = boxes.filter((b) => b.w > 2 && b.h > 2).map((box) => {
       const sampled = sampleTextStyle(ocrCanvas, box.x, box.y, box.w, box.h);
       return { kind: 'hit', fromOcr: true, page: pageIndex, text: box.text,
@@ -540,11 +601,11 @@ async function ocrVisiblePage() {
         fontFamily: 'Arial, "Noto Sans SC", sans-serif', bold: false, italic: false,
         color: sampled.color, background: sampled.background };
     });
-    if (!hits.length) return toast('OCR 暂未定位到文字。请使用「框选改字」直接选择旧文字；手写签名也能直接使用。', true);
+    if (!hits.length) return toast('两种 OCR 扫描模式均未定位到文字。可以使用「框选改字」直接修改扫描区域；签名不需要 OCR。', true);
     state.ocrPages.set(pageIndex, hits);
     renderOcrHits(pageIndex);
     if (state.ocrPages.size >= state.pdf.numPages) $('emptyTextWarning').classList.add('hidden');
-    toast(`第 ${pageIndex + 1} 页 OCR 完成：识别 ${hits.length} 个文字区域。点击文字修改；遗漏部分可用「框选改字」。`);
+    toast(`第 ${pageIndex + 1} 页文字定位完成：识别 ${hits.length} 个文字区域。点击文字修改；遗漏部分可用「框选改字」。`);
   } catch (error) {
     console.error(error);
     toast(`OCR 未完成：${error.message}。可直接使用「框选改字」或「手写签名」。`, true);
@@ -552,6 +613,48 @@ async function ocrVisiblePage() {
     button.disabled = false;
     busy(false);
   }
+}
+
+async function ocrSelectedRegion() {
+  const selection = state.selected;
+  if (!state.pdf || state.busy || selection?.kind !== 'hit') {
+    return toast('请先点击「框选改字」，在 PDF 上框住一个单独的文字区域。', true);
+  }
+  if (!membership.guardUse()) return;
+  busy(true, '正在识别选定的文字区域…');
+  try {
+    const worker = await getOcrWorker();
+    const page = await state.pdf.getPage(selection.page + 1);
+    const natural = page.getViewport({ scale: 1 });
+    const zoom = Math.min(3.6, Math.sqrt(5_000_000 / (natural.width * natural.height)));
+    const viewport = page.getViewport({ scale: zoom });
+    const x = clamp(Math.floor(selection.x * zoom) - 16, 0, viewport.width - 1);
+    const y = clamp(Math.floor(selection.y * zoom) - 16, 0, viewport.height - 1);
+    const w = clamp(Math.ceil(selection.width * zoom) + 32, 1, viewport.width - x);
+    const h = clamp(Math.ceil(selection.height * zoom) + 32, 1, viewport.height - y);
+    const fullCanvas = document.createElement('canvas');
+    fullCanvas.width = Math.ceil(viewport.width);
+    fullCanvas.height = Math.ceil(viewport.height);
+    await page.render({ canvasContext: fullCanvas.getContext('2d'), canvas: fullCanvas, viewport,
+      background: 'rgb(255,255,255)' }).promise;
+    const crop = document.createElement('canvas');
+    crop.width = Math.round(w);
+    crop.height = Math.round(h);
+    crop.getContext('2d').drawImage(fullCanvas, x, y, w, h, 0, 0, crop.width, crop.height);
+    await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+    let recognition = await worker.recognize(crop);
+    if (!recognition.data.text?.trim()) {
+      await worker.setParameters({ tessedit_pageseg_mode: '7' });
+      recognition = await worker.recognize(highContrastOcrCanvas(crop));
+    }
+    const text = recognition.data.text?.trim().replace(/\s*\n\s*/g, ' ') || '';
+    if (!text) return toast('选区 OCR 也没有识别结果。可以直接在编辑框输入你看到的文字。', true);
+    $('editText').value = text;
+    toast('已把选区识别结果填入编辑框。请校对后点击「应用修改」。');
+  } catch (error) {
+    console.error(error);
+    toast(`选区 OCR 失败：${error.message}。请直接输入文字。`, true);
+  } finally { busy(false); }
 }
 
 function makeThumbnail(pageCanvas, index) {
@@ -944,7 +1047,8 @@ function pdfLayoutLines(page, content) {
     const x = matrix[4];
     const y = matrix[5] - fontSize * .9;
     const existing = lines.find((line) => Math.abs(line.y - y) < Math.max(2.2, fontSize * .22));
-    const run = { text: item.str, x, fontSize, fontName: item.fontName || '' };
+    const run = { text: item.str, x, width: Math.max(0, item.width || 0),
+      fontSize, fontName: item.fontName || '' };
     if (existing) {
       existing.parts.push(run);
       existing.x = Math.min(existing.x, x);
@@ -963,71 +1067,169 @@ async function pdfToWord(file) {
     busy(true, mode === 'visual' ? '正在逐页渲染 PDF，以原版面制作 Word…' : '正在提取 PDF 文字并生成可编辑 DOCX…');
     const bytes = new Uint8Array(await file.arrayBuffer());
     const input = await pdfjsLib.getDocument({ data: bytes, ...pdfAssetOptions }).promise;
-    const paragraphs = [];
-    let chars = 0;
-    let pdfWidth = 595.28, pdfHeight = 841.89;
-    const marginPt = 9;
-    for (let i = 1; i <= input.numPages; i++) {
-      const page = await input.getPage(i);
-      if (mode === 'visual') {
-        const size = page.getViewport({ scale: 1 });
-        if (i === 1) { pdfWidth = size.width; pdfHeight = size.height; }
-        const renderViewport = page.getViewport({ scale: 1.65 });
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(renderViewport.width); canvas.height = Math.round(renderViewport.height);
-        await page.render({ canvasContext: canvas.getContext('2d'), canvas, viewport: renderViewport }).promise;
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', .91));
-        if (!blob) throw new Error('无法生成文档页面图像');
-        const image = new Uint8Array(await blob.arrayBuffer());
-        const viewWidthPx = (size.width - 20) * 96 / 72;
-        const viewHeightPx = viewWidthPx * size.height / size.width;
-        paragraphs.push(new window.docx.Paragraph({
-          children: [new window.docx.ImageRun({ type: 'jpg', data: image, transformation: { width: viewWidthPx, height: viewHeightPx } })],
-          spacing: { before: 0, after: 0 }, pageBreakBefore: i > 1,
-        }));
-        continue;
-      }
-      const size = page.getViewport({ scale: 1 });
-      if (i === 1) { pdfWidth = size.width; pdfHeight = size.height; }
-      const content = await page.getTextContent();
-      const lines = pdfLayoutLines(page, content);
-      let priorBottom = marginPt;
-      let first = true;
-      for (const line of lines) {
-        const lineHeight = line.fontSize * 1.16;
-        const gap = clamp(line.y - priorBottom, 0, pdfHeight);
-        const runs = line.parts.map((part) => {
-          chars += part.text.length;
-          return new window.docx.TextRun({ text: part.text,
-            size: Math.round(part.fontSize * 2),
-            font: familyForPdf(part.fontName).includes('Georgia') ? 'Times New Roman' : 'Arial',
-            bold: /bold|black|heavy/i.test(part.fontName),
-            italics: /italic|oblique/i.test(part.fontName) });
-        });
-        paragraphs.push(new window.docx.Paragraph({
-          children: runs,
-          pageBreakBefore: i > 1 && first,
-          indent: { left: Math.round(Math.max(0, line.x - marginPt) * 20) },
-          spacing: { before: Math.round(gap * 20), after: 0,
-            line: Math.round(lineHeight * 20), lineRule: 'exact' },
-        }));
-        priorBottom = line.y + lineHeight;
-        first = false;
-      }
-      if (!lines.length && i > 1) paragraphs.push(new window.docx.Paragraph({ text: '', pageBreakBefore: true }));
-    }
-    if (mode !== 'visual' && !chars) throw new Error('未检测到可复制的文字。请选择「保真模式」保留扫描 PDF 的页面外观。');
-    const wordDoc = new window.docx.Document({ sections: [{ properties: {
-      page: { size: { width: Math.round(pdfWidth * 20), height: Math.round(pdfHeight * 20) },
-        margin: mode === 'visual' ? { left: 180, right: 180, top: 90, bottom: 90 }
-          : { left: marginPt * 20, right: marginPt * 20, top: marginPt * 20, bottom: marginPt * 20 } },
-    }, children: paragraphs }] });
-    const blob = await window.docx.Packer.toBlob(wordDoc);
+    const result = mode === 'editable'
+      ? await pdfToPositionedWord(input)
+      : await pdfToVisualPageWord(input);
     if (!await membership.authorizeExport('pdf_to_word')) return;
-    downloadBlob(blob, `${safeFileName(file.name)}_${mode === 'visual' ? '保真版' : '文字可编辑版'}.docx`);
-    toast(mode === 'visual' ? `已生成 ${input.numPages} 页版面保真 Word（以图片保留页面外观，文字不可直接编辑）。` : `已导出布局参考版 · ${chars} 个可编辑字符。版面为近似重建，复杂合同仍可能错位。`);
+    downloadBlob(result.blob, `${safeFileName(file.name)}_${mode === 'visual' ? '原貌保真版' : '固定版式可编辑'}.docx`);
+    toast(mode === 'visual' ? `已生成 ${result.pages} 页原貌 Word（每页图像；文字不可编辑）。`
+      : `已生成 ${result.pages} 页、${result.chars} 个可编辑字符。文字固定位置，修改过长内容可能溢出。`);
   } catch (error) { console.error(error); toast(`PDF 转 Word 失败：${error.message}`, true); }
   finally { busy(false); }
+}
+
+async function pdfToVisualPageWord(input) {
+  const docx = window.docx;
+  const paragraphs = [];
+  const frames = [];
+  let widthPt, heightPt;
+  for (let pageNumber = 1; pageNumber <= input.numPages; pageNumber++) {
+    const page = await input.getPage(pageNumber);
+    const size = page.getViewport({ scale: 1 });
+    if (pageNumber === 1) { widthPt = size.width; heightPt = size.height; }
+    if (Math.abs(widthPt - size.width) > 1 || Math.abs(heightPt - size.height) > 1) {
+      throw new Error('PDF 含不同纸张尺寸，当前模式只能按统一纸张输出。');
+    }
+    if (pageNumber > 1) {
+      paragraphs.push(new docx.Paragraph({ text: '', pageBreakBefore: true,
+        spacing: { before: 0, after: 0, line: 20, lineRule: 'exact' } }));
+      frames.push(null);
+    }
+    const viewport = page.getViewport({ scale: 1.8 });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await page.render({ canvasContext: canvas.getContext('2d'), canvas, viewport,
+      background: 'rgb(255,255,255)' }).promise;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', .94));
+    if (!blob) throw new Error('无法生成页面图像');
+    const image = new Uint8Array(await blob.arrayBuffer());
+    paragraphs.push(new docx.Paragraph({ children: [new docx.ImageRun({ type: 'jpg', data: image,
+      transformation: { width: widthPt * 96 / 72, height: heightPt * 96 / 72 } })],
+      spacing: { before: 0, after: 0 } }));
+    frames.push({ x: 0, y: 0, w: widthPt, h: heightPt });
+    if (pageNumber % 3 === 0) await wait(0);
+  }
+  return { blob: await packWordWithFrames(paragraphs, frames, widthPt, heightPt), pages: input.numPages };
+}
+
+// In editable mode, reconstruct text as page-anchored Word frames. Unlike
+// ordinary Word paragraphs, independent frames do not reflow the rest of a
+// fixed-layout contract when a preceding line wraps. The page image preserves
+// drawings and tables; native PDF text is removed from the image and added
+// back as editable Word text. Very intricate backgrounds still need review.
+async function pdfToPositionedWord(input) {
+  const paragraphs = [];
+  const frames = [];
+  let chars = 0;
+  let widthPt = 595.28, heightPt = 841.89;
+  const docx = window.docx;
+  for (let pageNumber = 1; pageNumber <= input.numPages; pageNumber++) {
+    const page = await input.getPage(pageNumber);
+    const natural = page.getViewport({ scale: 1 });
+    if (pageNumber === 1) { widthPt = natural.width; heightPt = natural.height; }
+    if (Math.abs(widthPt - natural.width) > 1 || Math.abs(heightPt - natural.height) > 1) {
+      throw new Error('此 PDF 含不同纸张尺寸。固定版式可编辑模式暂不支持混合尺寸，请使用保真模式。');
+    }
+    if (pageNumber > 1) {
+      paragraphs.push(new docx.Paragraph({ text: '', pageBreakBefore: true,
+        spacing: { before: 0, after: 0, line: 20, lineRule: 'exact' } }));
+      frames.push(null);
+    }
+    const content = await page.getTextContent();
+    const lines = pdfLayoutLines(page, content);
+
+    const scale = Math.min(1.8, Math.sqrt(5_000_000 / (natural.width * natural.height)));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, canvas, viewport,
+      background: 'rgb(255,255,255)' }).promise;
+    for (const item of content.items) {
+      if (!item.str?.trim()) continue;
+      const matrix = pdfjsLib.Util.transform(viewport.transform, item.transform);
+      const height = Math.hypot(matrix[2], matrix[3]);
+      const fontStyle = content.styles[item.fontName] || {};
+      const ascent = (typeof fontStyle.ascent === 'number' ? fontStyle.ascent : .82) * height;
+      const x = matrix[4];
+      const y = matrix[5] - ascent;
+      const w = Math.max(2, item.width * scale);
+      if (x + w < 0 || y + height < 0 || x > canvas.width || y > canvas.height) continue;
+      const sampled = sampleTextStyle(canvas, clamp(x, 0, canvas.width - 1),
+        clamp(y, 0, canvas.height - 1), w, height);
+      context.fillStyle = sampled.background;
+      // A small inset keeps box borders and underlines outside the glyph area.
+      context.fillRect(x - .5, y + height * .06, w + 1, height * .89);
+    }
+    const imageBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', .94));
+    if (!imageBlob) throw new Error('页面背景处理失败');
+    const imageData = new Uint8Array(await imageBlob.arrayBuffer());
+    paragraphs.push(new docx.Paragraph({
+      children: [new docx.ImageRun({ type: 'jpg', data: imageData,
+        transformation: { width: widthPt * 96 / 72, height: heightPt * 96 / 72 } })],
+      spacing: { before: 0, after: 0 },
+    }));
+    frames.push({ x: 0, y: 0, w: widthPt, h: heightPt });
+    for (const line of lines) {
+      if (!line.parts.length || !line.parts.some((part) => part.text.trim())) continue;
+      const runs = line.parts.map((part) => {
+        chars += part.text.length;
+        return new docx.TextRun({ text: part.text, size: Math.round(part.fontSize * 2),
+          font: familyForPdf(part.fontName).includes('Georgia') ? 'Times New Roman' : 'Arial',
+          bold: /bold|black|heavy/i.test(part.fontName),
+          italics: /italic|oblique/i.test(part.fontName) });
+      });
+      paragraphs.push(new docx.Paragraph({ children: runs,
+        spacing: { before: 0, after: 0, line: Math.round(line.fontSize * 1.16 * 20), lineRule: 'exact' },
+      }));
+      frames.push({ x: Math.max(0, line.x), y: Math.max(0, line.y),
+        w: Math.max(10, widthPt - line.x - 2), h: Math.max(13, line.fontSize * 1.7) });
+    }
+    if (pageNumber % 2 === 0) await wait(0);
+  }
+  if (!chars) throw new Error('此文件是纯扫描图像，没有可编辑文字层。请先在 PDF 编辑器用 OCR/框选改字，或选择原貌保真模式。');
+  return { blob: await packWordWithFrames(paragraphs, frames, widthPt, heightPt),
+    pages: input.numPages, chars };
+}
+
+async function packWordWithFrames(paragraphs, frames, widthPt, heightPt) {
+  const docx = window.docx;
+  const wordDoc = new docx.Document({ sections: [{ properties: { page: {
+    size: { width: Math.round(widthPt * 20), height: Math.round(heightPt * 20) },
+    margin: { left: 0, right: 0, top: 0, bottom: 0 },
+  } }, children: paragraphs }] });
+  const originalBlob = await docx.Packer.toBlob(wordDoc);
+  const archive = await window.JSZip.loadAsync(originalBlob);
+  const xmlFile = archive.file('word/document.xml');
+  if (!xmlFile) throw new Error('无法写入 Word 页面位置');
+  const dom = new DOMParser().parseFromString(await xmlFile.async('string'), 'application/xml');
+  const wordNs = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const body = dom.getElementsByTagNameNS(wordNs, 'body')[0];
+  const nodes = [...body.children].filter((el) => el.localName === 'p');
+  if (nodes.length !== frames.length) throw new Error('Word 版面锚点数量不一致');
+  for (let index = 0; index < nodes.length; index++) {
+    const pos = frames[index];
+    if (!pos) continue;
+    const paragraph = nodes[index];
+    let properties = [...paragraph.children].find((el) => el.localName === 'pPr');
+    if (!properties) {
+      properties = dom.createElementNS(wordNs, 'w:pPr');
+      paragraph.insertBefore(properties, paragraph.firstChild);
+    }
+    const frame = dom.createElementNS(wordNs, 'w:framePr');
+    for (const [name, value] of Object.entries({ x: Math.round(pos.x * 20), y: Math.round(pos.y * 20),
+      w: Math.round(pos.w * 20), h: Math.round(pos.h * 20),
+      hAnchor: 'page', vAnchor: 'page', wrap: 'none' })) {
+      frame.setAttributeNS(wordNs, `w:${name}`, String(value));
+    }
+    properties.insertBefore(frame, properties.firstChild);
+  }
+  archive.file('word/document.xml', new XMLSerializer().serializeToString(dom));
+  return archive.generateAsync({ type: 'blob', compression: 'DEFLATE' });
 }
 
 function wordChildren(node, localName) {
@@ -1341,6 +1543,7 @@ function init() {
   $('addTool').onclick = () => setTool('add');
   $('regionTool').onclick = () => setTool('region');
   $('ocrTool').onclick = ocrVisiblePage;
+  $('ocrSelectionTool').onclick = ocrSelectedRegion;
   $('applyEdit').onclick = applyEdit;
   $('deleteEdit').onclick = deleteSelectedPatch;
   $('undoTool').onclick = undo;
