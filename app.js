@@ -26,6 +26,11 @@ const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const safeFileName = (name) => name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_');
 const newId = () => globalThis.crypto?.randomUUID?.() || `patch_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  installPrompt = event;
+});
 
 // Keep physical PDF coordinates (points) independent of the screen size.
 function viewportScale(page) {
@@ -429,7 +434,7 @@ function mergeOcrWordsIntoLines(boxes) {
       const last = chunk[chunk.length - 1];
       // Large horizontal gaps are independent fields, even on the same baseline.
       // Never let a distant label be repainted when only one value is edited.
-      if (last && box.x - last.x - last.w > Math.max(16, box.h * 1.55)) flush();
+      if (last && box.x - last.x - last.w > Math.max(8, box.h * .9)) flush();
       chunk.push(box);
     }
     flush();
@@ -478,7 +483,7 @@ function ocrBoxes(result) {
       };
       for (const word of parts) {
         const previous = segment[segment.length - 1];
-        if (previous && word.x - previous.x - previous.w > Math.max(16, word.h * 1.55)) flush();
+        if (previous && word.x - previous.x - previous.w > Math.max(8, word.h * .9)) flush();
         segment.push(word);
       }
       flush();
@@ -747,6 +752,7 @@ function selectHit(hit) {
   setPropertyDrawer(true);
   $('propertyStatus').textContent = hit.fromManual ? '手动框选区域' : hit.fromOcr ? 'OCR 识别文字' : '原有文字';
   $('deleteEdit').classList.add('hidden');
+  $('eraseOriginal').classList.remove('hidden');
 }
 
 function selectPatch(id) {
@@ -761,9 +767,15 @@ function selectPatch(id) {
     $('signaturePropertyFields').classList.remove('hidden');
     $('signatureWidth').value = Math.round(patch.width);
     $('signatureSizeValue').textContent = `${Math.round(patch.width)} pt`;
+  } else if (patch.kind === 'erase') {
+    $('noSelection').classList.add('hidden');
+    $('propertiesForm').classList.remove('hidden');
+    $('textPropertyFields').classList.add('hidden');
+    $('signaturePropertyFields').classList.add('hidden');
   } else showProperties(patch);
-  $('propertyStatus').textContent = patch.kind === 'signature' ? '手写签名' : patch.kind === 'replace' ? '文字替换' : '新增文字';
+  $('propertyStatus').textContent = patch.kind === 'signature' ? '手写签名' : patch.kind === 'erase' ? '原字已遮盖' : patch.kind === 'replace' ? '文字替换' : '新增文字';
   $('deleteEdit').classList.remove('hidden');
+  $('eraseOriginal').classList.add('hidden');
   document.querySelectorAll('.patch-item').forEach((node) => node.classList.toggle('active', node.dataset.patch === id));
 }
 
@@ -773,6 +785,7 @@ function clearSelection() {
   $('noSelection').classList.remove('hidden');
   $('propertiesForm').classList.add('hidden');
   $('propertyStatus').textContent = '无选中项目';
+  $('eraseOriginal').classList.add('hidden');
   document.querySelectorAll('.patch-item.active').forEach((node) => node.classList.remove('active'));
 }
 
@@ -810,6 +823,36 @@ function showProperties(item) {
   $('matchNote').textContent = item.fromManual ? '手动框选的旧文字将使用选定底色遮盖，再绘制新文字。请确认范围和字号；复杂背景可能留下色块。' : item.fromOcr ? 'OCR 文字请先校对。遮盖扫描图片上的旧文字可能留下背景痕迹。' : item.kind === 'hit' || item.kind === 'replace' ? '尽量匹配字体和颜色，但特殊字体及复杂背景不保证完全一致。原文字没有被安全删除。' : '可在页面上拖动文字位置。导出时新文字将绘制到 PDF 内。';
 }
 
+// A blank replacement hides the selected visible glyphs. This is not secure
+// redaction: the original PDF bytes and searchable text can remain embedded.
+function eraseOriginalText() {
+  if (state.selected?.kind !== 'hit') return;
+  snapshot();
+  const patch = { ...state.selected, id: newId(), kind: 'erase', text: '' };
+  state.patchList.push(patch);
+  state.selected = { kind: 'patch', id: patch.id };
+  renderPatches();
+  selectPatch(patch.id);
+  setPropertyDrawer(false);
+  toast('已遮盖原有文字。此操作不是不可恢复的安全涂黑；请保存 PDF。');
+}
+
+function fittedTextMetrics(patch) {
+  const measure = document.createElement('canvas').getContext('2d');
+  const text = patch.text || '';
+  let size = patch.fontSize || 12;
+  const family = patch.fontFamily || 'Arial, sans-serif';
+  if (patch.kind === 'replace') {
+    // The exact same constrained size is used on screen and at export.
+    const maxWidth = Math.max(4, patch.width - 1);
+    const maxHeight = Math.max(4, patch.height * 1.12);
+    measure.font = `${patch.italic ? 'italic ' : ''}${patch.bold ? '700 ' : ''}${size}px ${family}`;
+    const measured = Math.max(1, measure.measureText(text).width + 2);
+    size *= Math.min(1, maxWidth / measured, maxHeight / (size * 1.3));
+  }
+  return { fontSize: Math.max(1, size), family };
+}
+
 function snapshot() {
   state.undoStack.push(clone(state.patchList));
   if (state.undoStack.length > 25) state.undoStack.shift();
@@ -818,7 +861,7 @@ function snapshot() {
 
 function applyEdit() {
   if (!state.selected) return;
-  if (state.selected.kind === 'patch' && state.patchList.find((patch) => patch.id === state.selected.id)?.kind === 'signature') return;
+  if (state.selected.kind === 'patch' && ['signature', 'erase'].includes(state.patchList.find((patch) => patch.id === state.selected.id)?.kind)) return;
   const text = $('editText').value;
   const fontSize = clamp(Number($('fontSize').value) || 12, 5, 96);
   const props = { text, fontSize, fontFamily: $('fontFamily').value, color: $('fontColor').value, background: $('backgroundColor').value, bold: $('fontBold').checked, italic: $('fontItalic').checked };
@@ -834,6 +877,7 @@ function applyEdit() {
   }
   renderPatches();
   if (state.selected.kind === 'patch') selectPatch(state.selected.id);
+  setPropertyDrawer(false);
   toast('修改已应用。点击「保存 PDF」导出文件。');
 }
 
@@ -872,7 +916,7 @@ function renderPatchesForPage(pageIndex) {
     el.dataset.patch = patch.id;
     el.style.left = `${patch.x * scale}px`;
     el.style.top = `${patch.y * scale}px`;
-    el.style.minWidth = `${patch.kind === 'replace' ? patch.width * scale : 10}px`;
+    el.style.minWidth = `${patch.kind === 'replace' || patch.kind === 'erase' ? patch.width * scale : 10}px`;
     el.style.minHeight = `${patch.height * scale}px`;
     if (patch.kind === 'signature') {
       el.classList.add('signature-patch');
@@ -883,11 +927,19 @@ function renderPatchesForPage(pageIndex) {
       img.alt = '手写签名';
       el.append(img);
     } else {
-      el.style.backgroundColor = patch.kind === 'replace' ? patch.background : 'transparent';
+      const bounded = patch.kind === 'replace' || patch.kind === 'erase';
+      if (bounded) {
+        el.style.width = `${patch.width * scale}px`;
+        el.style.height = `${patch.height * scale}px`;
+        el.style.overflow = 'hidden';
+        el.style.whiteSpace = 'nowrap';
+      }
+      el.style.backgroundColor = bounded ? patch.background : 'transparent';
       el.style.color = patch.color;
-      el.style.font = `${patch.italic ? 'italic' : 'normal'} ${patch.bold ? '700' : '400'} ${patch.fontSize * scale}px ${patch.fontFamily}`;
+      const metrics = fittedTextMetrics(patch);
+      el.style.font = `${patch.italic ? 'italic' : 'normal'} ${patch.bold ? '700' : '400'} ${metrics.fontSize * scale}px ${metrics.family}`;
       const text = document.createElement('span');
-      text.textContent = patch.text;
+      text.textContent = patch.kind === 'erase' ? '' : patch.text;
       el.append(text);
     }
     el.addEventListener('click', (e) => { e.stopPropagation(); selectPatch(patch.id); });
@@ -1046,13 +1098,17 @@ async function exportPdf() {
         page.drawImage(png, { x: patch.x, y: pageHeight - patch.y - patch.height, width: patch.width, height: patch.height });
         continue;
       }
-      if (patch.kind === 'replace') {
+      if (patch.kind === 'replace' || patch.kind === 'erase') {
         const hex = patch.background.replace('#', '');
-        page.drawRectangle({ x: patch.x - .75, y: pageHeight - patch.y - patch.height - 1.5, width: patch.width + 1.5, height: patch.height + 2.5, color: rgb(parseInt(hex.slice(0, 2), 16) / 255, parseInt(hex.slice(2, 4), 16) / 255, parseInt(hex.slice(4, 6), 16) / 255) });
+        // Keep masking inside the selected field so adjacent labels survive.
+        page.drawRectangle({ x: patch.x, y: pageHeight - patch.y - patch.height, width: patch.width, height: patch.height, color: rgb(parseInt(hex.slice(0, 2), 16) / 255, parseInt(hex.slice(2, 4), 16) / 255, parseInt(hex.slice(4, 6), 16) / 255) });
       }
-      const imageInfo = rasterizeText(patch.text, patch.fontSize, patch.fontFamily, patch.color, patch.bold, patch.italic);
+      if (patch.kind === 'erase') continue;
+      const metrics = fittedTextMetrics(patch);
+      const imageInfo = rasterizeText(patch.text, metrics.fontSize, patch.fontFamily, patch.color, patch.bold, patch.italic);
       const image = await pdf.embedPng(imageInfo.data);
-      page.drawImage(image, { x: patch.x, y: pageHeight - patch.y - imageInfo.height, width: imageInfo.width, height: imageInfo.height });
+      const fit = patch.kind === 'replace' ? Math.min(1, patch.width / imageInfo.width, patch.height / imageInfo.height) : 1;
+      page.drawImage(image, { x: patch.x, y: pageHeight - patch.y - imageInfo.height * fit, width: imageInfo.width * fit, height: imageInfo.height * fit });
     }
     const result = await pdf.save();
     busy(false);
@@ -1131,11 +1187,6 @@ async function pdfToVisualPageWord(input) {
     if (Math.abs(widthPt - size.width) > 1 || Math.abs(heightPt - size.height) > 1) {
       throw new Error('PDF 含不同纸张尺寸，当前模式只能按统一纸张输出。');
     }
-    if (pageNumber > 1) {
-      paragraphs.push(new docx.Paragraph({ text: '', pageBreakBefore: true,
-        spacing: { before: 0, after: 0, line: 20, lineRule: 'exact' } }));
-      frames.push(null);
-    }
     const viewport = page.getViewport({ scale: 1.8 });
     const canvas = document.createElement('canvas');
     canvas.width = Math.ceil(viewport.width);
@@ -1172,11 +1223,6 @@ async function pdfToPositionedWord(input) {
     if (pageNumber === 1) { widthPt = natural.width; heightPt = natural.height; }
     if (Math.abs(widthPt - natural.width) > 1 || Math.abs(heightPt - natural.height) > 1) {
       throw new Error('此 PDF 含不同纸张尺寸。固定版式可编辑模式暂不支持混合尺寸，请使用保真模式。');
-    }
-    if (pageNumber > 1) {
-      paragraphs.push(new docx.Paragraph({ text: '', pageBreakBefore: true,
-        spacing: { before: 0, after: 0, line: 20, lineRule: 'exact' } }));
-      frames.push(null);
     }
     const content = await page.getTextContent();
     // One anchored Word frame per PDF text fragment. The old algorithm joined
@@ -1249,10 +1295,24 @@ async function pdfToPositionedWord(input) {
 
 async function packWordWithFrames(paragraphs, frames, widthPt, heightPt) {
   const docx = window.docx;
-  const wordDoc = new docx.Document({ sections: [{ properties: { page: {
+  const pageProps = { type: docx.SectionType.NEXT_PAGE, page: {
     size: { width: Math.round(widthPt * 20), height: Math.round(heightPt * 20) },
     margin: { left: 0, right: 0, top: 0, bottom: 0 },
-  } }, children: paragraphs }] });
+  } };
+  // Anchored paragraphs do not advance the Word body's pagination. An
+  // ordinary break paragraph adds a blank page in some Word viewers. Give
+  // each source PDF page its own next-page DOCX section instead.
+  const groups = [];
+  for (let index = 0; index < frames.length; index++) {
+    const rect = frames[index];
+    if (rect && rect.x === 0 && rect.y === 0 &&
+        Math.abs(rect.w - widthPt) < .1 && Math.abs(rect.h - heightPt) < .1) {
+      groups.push([]);
+    }
+    if (!groups.length) throw new Error('Word 逐页定位缺少背景起点');
+    groups[groups.length - 1].push(paragraphs[index]);
+  }
+  const wordDoc = new docx.Document({ sections: groups.map((children) => ({ properties: pageProps, children })) });
   const originalBlob = await docx.Packer.toBlob(wordDoc);
   const archive = await window.JSZip.loadAsync(originalBlob);
   const xmlFile = archive.file('word/document.xml');
@@ -1260,7 +1320,9 @@ async function packWordWithFrames(paragraphs, frames, widthPt, heightPt) {
   const dom = new DOMParser().parseFromString(await xmlFile.async('string'), 'application/xml');
   const wordNs = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   const body = dom.getElementsByTagNameNS(wordNs, 'body')[0];
-  const nodes = [...body.children].filter((el) => el.localName === 'p');
+  const nodes = [...body.children].filter((el) => el.localName === 'p' && !(
+    el.getElementsByTagNameNS(wordNs, 'sectPr').length &&
+    !el.getElementsByTagNameNS(wordNs, 'r').length));
   if (nodes.length !== frames.length) throw new Error('Word 版面锚点数量不一致');
   for (let index = 0; index < nodes.length; index++) {
     const pos = frames[index];
@@ -1381,10 +1443,30 @@ async function loadHtmlCanvas() {
   await htmlCanvasLoader;
 }
 
+async function wordPageDefinition(arrayBuffer) {
+  const zip = await window.JSZip.loadAsync(arrayBuffer.slice(0));
+  const xml = zip.file('word/document.xml');
+  if (!xml) throw new Error('DOCX 缺少页面定义');
+  const dom = new DOMParser().parseFromString(await xml.async('string'), 'text/xml');
+  const pages = [...dom.getElementsByTagNameNS('*', 'pgSz')];
+  const size = pages[pages.length - 1];
+  const widthTwips = Number(wordAttr(size, 'w')) || 11906;
+  const heightTwips = Number(wordAttr(size, 'h')) || 16838;
+  const paragraphs = [...dom.getElementsByTagNameNS('*', 'p')];
+  const starts = paragraphs.filter((p) => {
+    const props = wordChildren(p, 'pPr')[0];
+    return Boolean(wordFirst(props, 'pageBreakBefore')) ||
+      [...p.getElementsByTagNameNS('*', 'br')].some((b) => wordAttr(b, 'type') === 'page');
+  }).length;
+  return { widthPx: widthTwips / 15, heightPx: heightTwips / 15, explicitBreaks: starts };
+}
+
 async function renderDocxToPdf(file) {
   busy(true, 'Word → PDF：正在加载文档排版组件…');
   const preview = await loadDocxPreview();
   await loadHtmlCanvas();
+  const sourceBytes = await file.arrayBuffer();
+  const documentPage = await wordPageDefinition(sourceBytes);
   const host = document.createElement('div');
   host.className = 'docx-render-host';
   // html2canvas cannot safely capture a document placed thousands of pixels
@@ -1395,7 +1477,7 @@ async function renderDocxToPdf(file) {
   document.body.append(host);
   try {
     busy(true, 'Word → PDF：正在还原 DOCX 样式、表格及图片…');
-    await preview.renderAsync(await file.arrayBuffer(), host, null, {
+    await preview.renderAsync(sourceBytes.slice(0), host, null, {
       inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: false,
       renderHeaders: true, renderFooters: true, renderComments: false,
     });
@@ -1406,22 +1488,34 @@ async function renderDocxToPdf(file) {
         setTimeout(resolve, 4500); })));
     const sections = [...host.querySelectorAll('section.docx')];
     if (!sections.length) throw new Error('未能读取 Word 页面');
+    // An explicit Word page break is a mandatory page boundary. If the HTML
+    // renderer ignored it, we must not silently produce a merged-page PDF.
+    if (documentPage.explicitBreaks > 0 && sections.length < documentPage.explicitBreaks + 1) {
+      throw new Error(`原 Word 有 ${documentPage.explicitBreaks + 1} 个明确分页区域，但浏览器仅还原 ${sections.length} 页。为避免合并原文页，已取消转换；可使用 Word 的「另存为 PDF」保留完全一致的分页。`);
+    }
     const pdf = await PDFDocument.create();
     for (let index = 0; index < sections.length; index++) {
       const element = sections[index];
       if (element.clientWidth < 10 || element.clientHeight < 10) throw new Error('页面没有有效尺寸');
-      const css = getComputedStyle(element);
-      const nativeHeight = parseFloat(css.minHeight) || element.clientWidth * Math.SQRT2;
-      const pageCssHeight = Math.max(120, nativeHeight);
-      // docx-preview does not implement Word's automatic pagination. If a
-      // long paragraph flow expands a section, split it into A4-sized pages.
+      // Read the physical page size from the DOCX (w:pgSz). Using a section's
+      // scrollHeight as its page size previously swallowed the following page.
+      const pageCssHeight = Math.max(120, documentPage.heightPx * element.clientWidth / documentPage.widthPx);
       const contentHeight = Math.max(element.scrollHeight, element.clientHeight);
-      const sectionsToPrint = Math.max(1, Math.ceil((contentHeight - 3) / pageCssHeight));
+      // When docx-preview has already made explicit page sections, each
+      // section is exactly one paper sheet, even when child overflow is noisy.
+      const paginatedSections = documentPage.explicitBreaks > 0 || sections.length > 1;
+      const sectionsToPrint = paginatedSections ? 1 : Math.max(1, Math.ceil((contentHeight - 3) / pageCssHeight));
       if (sectionsToPrint > 120) throw new Error('Word 内容超出可转换页数');
       for (let slice = 0; slice < sectionsToPrint; slice++) {
         busy(true, `Word → PDF：正在绘制第 ${index + 1} 个章节 · 第 ${slice + 1} / ${sectionsToPrint} 页…`);
         const yOffset = slice * pageCssHeight;
-        const sliceHeight = Math.min(pageCssHeight, contentHeight - yOffset);
+        const sliceHeight = pageCssHeight;
+        // Prevent content from neighboring Word pages painting over the page
+        // snapshot. Keep layout dimensions unchanged except the clip region.
+        if (paginatedSections) {
+          element.style.overflow = 'hidden';
+          element.style.height = `${pageCssHeight}px`;
+        }
         const canvas = await window.html2canvas(element, {
           scale: Math.min(1.6, Math.max(1.1, 1280 / element.clientWidth)),
           x: 0, y: yOffset, width: element.clientWidth,
@@ -1585,6 +1679,29 @@ function showUrlModal() {
 }
 
 function init() {
+  const installButton = document.createElement('button');
+  installButton.id = 'installApp';
+  installButton.className = 'install-app-btn';
+  installButton.type = 'button';
+  installButton.textContent = '安装 App';
+  installButton.onclick = async () => {
+    if (installPrompt) {
+      await installPrompt.prompt();
+      installPrompt = null;
+    } else {
+      toast(/iPad|iPhone|iPod/.test(navigator.userAgent)
+        ? 'iPhone / iPad：请在 Safari 点击「分享」→「添加到主屏幕」。'
+        : '请在 Chrome / Edge 浏览器菜单选择「安装应用」或「添加到主屏幕」。');
+    }
+  };
+  document.querySelector('.top-actions').insertBefore(installButton, $('accountBtn'));
+  const eraseButton = document.createElement('button');
+  eraseButton.id = 'eraseOriginal';
+  eraseButton.type = 'button';
+  eraseButton.className = 'delete-btn hidden';
+  eraseButton.textContent = '仅删除原有文字（遮盖）';
+  eraseButton.title = '遮盖选中原字，不会永久删除 PDF 底层文本；需要安全涂黑请使用专业脱敏工具。';
+  $('applyEdit').insertAdjacentElement('afterend', eraseButton);
   const drawerButton = document.createElement('button');
   drawerButton.id = 'propertiesToggle';
   drawerButton.type = 'button';
@@ -1630,6 +1747,7 @@ function init() {
   $('ocrTool').onclick = ocrVisiblePage;
   $('ocrSelectionTool').onclick = ocrSelectedRegion;
   $('applyEdit').onclick = applyEdit;
+  $('eraseOriginal').onclick = eraseOriginalText;
   $('deleteEdit').onclick = deleteSelectedPatch;
   $('undoTool').onclick = undo;
   $('zoomIn').onclick = async () => { state.zoom = clamp(Math.round((state.zoom + .2) * 10) / 10, .5, 2.2); $('zoomValue').textContent = `${Math.round(state.zoom * 100)}%`; await renderPages(); };
@@ -1640,8 +1758,12 @@ function init() {
   });
   attachDrop($('dropzone'), loadPdfFile);
   attachDrop($('convertDrop'), processConverterFile);
-  for (const id of ['topOpen', 'topExport', 'editorExport', 'applyEdit', 'deleteEdit', 'zoomIn', 'zoomOut', 'signatureTool']) $(id).dataset.busyLock = '1';
+  for (const id of ['topOpen', 'topExport', 'editorExport', 'applyEdit', 'eraseOriginal', 'deleteEdit', 'zoomIn', 'zoomOut', 'signatureTool']) $(id).dataset.busyLock = '1';
 }
 
 init();
 membership.init();
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js')
+    .catch((error) => console.warn('离线 App 缓存暂不可用', error)));
+}

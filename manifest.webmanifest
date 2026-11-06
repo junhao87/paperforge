@@ -1,0 +1,15 @@
+{
+  "id": "./",
+  "name": "PaperForge — PDF 工作台",
+  "short_name": "PaperForge",
+  "description": "在手机、平板与电脑上编辑 PDF、签名并转换 Word。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f8fc",
+  "theme_color": "#10182b",
+  "icons": [
+    { "src": "./assets/paperforge-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "./assets/paperforge-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0c1528" />
   <meta name="description" content="PaperForge — 浏览器 PDF 编辑与 Word 转换，Google 登录后可免费导出一次。" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="PaperForge" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="./assets/paperforge-icon.svg" />
+  <link rel="apple-touch-icon" href="./assets/paperforge-icon-180.png" />
   <title>PaperForge · 智能 PDF 工作台</title>
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="./membership.css" />
@@ -32,7 +38,7 @@
   </svg>
   <div id="app">
     <aside class="sidebar">
-      <div class="brand"><div class="brand-mark"><svg><use href="#ic-layers"/></svg></div><div><strong>paperforge<span>.</span></strong><small>PDF WORKSPACE</small></div></div>
+      <div class="brand"><div class="brand-mark"><img src="./assets/paperforge-icon.svg" alt="PaperForge" /></div><div><strong>paperforge<span>.</span></strong><small>PDF WORKSPACE</small></div></div>
       <div class="side-group">
         <p class="side-label">WORKSPACE <span>工作空间</span></p>
         <button class="side-action active" id="navEditor"><svg><use href="#ic-pencil"/></svg> PDF 编辑器 <span class="side-active-dot"></span></button>
@@ -45,7 +51,7 @@
         <div id="currentDocument" class="doc-status"><div class="doc-icon"><svg><use href="#ic-file"/></svg></div><div><strong>尚未选择文件</strong><small>PDF / DOCX</small></div></div>
       </div>
       <div class="side-bottom"><div class="privacy-mark"><svg><use href="#ic-shield"/></svg></div><strong>Private by design</strong><p>文件在浏览器本地处理，不会自动上传到服务器。</p><span class="private-chip"><i></i> LOCAL PROCESSING</span></div>
-      <div class="side-footer">PaperForge <span>v2.4 • Beta</span></div>
+      <div class="side-footer">PaperForge <span>v2.5 • Beta</span></div>
     </aside>
 
     <div class="app-main">
@@ -53,7 +59,7 @@
 
       <section class="welcome" id="welcome">
         <div class="hero-glow"></div>
-        <div class="hero-kicker"><span class="sparkle">✦</span> YOUR DOCUMENT, YOUR CONTROL <span class="hero-kicker-line"></span> PaperForge v2.4 Beta</div>
+        <div class="hero-kicker"><span class="sparkle">✦</span> YOUR DOCUMENT, YOUR CONTROL <span class="hero-kicker-line"></span> PaperForge v2.5 Beta</div>
         <h1>让每一份文档<br /><em>恰如你所想。</em></h1>
         <p class="hero-description">编辑 PDF 原有文字、添加新内容、转换 Word 格式。<br />Google 登录后赠送一次导出，Premium RM10/月。</p>
         <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传 PDF 文件"><div class="upload-illustration"><div class="upload-back"></div><div class="upload-front"><svg><use href="#ic-file"/></svg><span>PDF</span></div><div class="upload-circle"><svg><use href="#ic-plus"/></svg></div></div><strong>拖放 PDF 到这里，或点击上传</strong><span>支持 PDF 文件 · 建议小于 30MB</span><button class="choose-btn" id="heroUpload">选择文件 <svg><use href="#ic-arrow"/></svg></button></div>
@@ -67,7 +73,7 @@
       </section>
 
       <section class="converter hidden" id="converter"><div class="converter-head"><span class="converter-kicker">DOCUMENT CONVERTER</span><h2 id="converterTitle">PDF 转 Word</h2><p id="converterDescription">保留版面外观，或生成可编辑文字。</p></div><div id="pdfModeOptions" class="convert-mode"><label><input type="radio" name="pdfMode" value="visual" checked/><strong>原貌保真</strong><small>逐页保留原 PDF 外观，但 Word 中为整页图像，文字不可编辑</small></label><label><input type="radio" name="pdfMode" value="editable"/><strong>固定版式可编辑</strong><small>原页面图形 + 可编辑定位文字，尽量保留布局；内容改长可能溢出文字框</small></label></div><div class="convert-drop" id="convertDrop" tabindex="0" role="button"><span class="convert-graphic"><svg><use href="#ic-layers"/></svg></span><h3 id="convertDropTitle">上传 PDF 文件</h3><p id="convertHelp">拖动文件到此处，或者点击选择</p><button id="convertChoose">选择文件 <svg><use href="#ic-arrow"/></svg></button></div><div class="converter-notice"><svg><use href="#ic-shield"/></svg><div><strong>关于转换保真度</strong><p id="converterNotice">纯浏览器无法对所有复杂 PDF 保证与 Word 完全同版。</p></div></div></section>
-      <footer class="mobile-footer">PaperForge · 本地处理 · v2.4 Beta</footer>
+      <footer class="mobile-footer">PaperForge · 本地处理 · v2.5 Beta</footer>
     </div>
   </div>
 
