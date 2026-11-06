@@ -1,8 +1,9 @@
 import * as pdfjsLib from './vendor/pdf.min.mjs';
+import { membership } from './membership.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdf.worker.min.mjs', import.meta.url).href;
 
-const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+const { PDFDocument, rgb } = window.PDFLib;
 const $ = (id) => document.getElementById(id);
 const PAGE_SCALE = 1.27;
 const pdfAssetOptions = {
@@ -15,7 +16,7 @@ const pdfAssetOptions = {
 const state = {
   name: '', bytes: null, pdf: null, textPages: [], patchList: [], undoStack: [],
   selected: null, tool: 'edit', zoom: 1, renderId: 0, view: 'home',
-  converter: 'pdf-word', busy: false,
+  converter: 'pdf-word', busy: false, ocrPages: new Map(),
 };
 
 const formatBytes = (n) => n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -69,10 +70,12 @@ function view(name) {
 }
 
 function openFilePicker(type = 'pdf') {
+  if (!membership.guardUse()) return;
   (type === 'docx' ? $('wordInput') : type === 'pdf-convert' ? $('convertPdfInput') : $('fileInput')).click();
 }
 
 function configureConverter(kind) {
+  if (!membership.guardUse()) return;
   state.converter = kind;
   const isPdf = kind === 'pdf-word';
   $('converterTitle').textContent = isPdf ? 'PDF 转 Word' : 'Word 转 PDF';
@@ -95,6 +98,7 @@ async function openPdf(bytes, name) {
   state.undoStack = [];
   state.selected = null;
   state.textPages = [];
+  state.ocrPages = new Map();
   state.zoom = 1;
   $('zoomValue').textContent = '100%';
   $('currentDocument').innerHTML = `<div class="doc-icon">${svg('file')}</div><div><strong title="${escapeAttr(name)}">${escapeHtml(name)}</strong><small>${pdf.numPages} 页 · ${formatBytes(raw.byteLength)}</small></div>`;
@@ -115,6 +119,7 @@ const escapeAttr = escapeHtml;
 
 async function loadPdfFile(file) {
   if (!file) return;
+  if (!membership.guardUse()) return;
   if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') return toast('请选择 PDF 文件。', true);
   try {
     busy(true, '正在读取并渲染 PDF…');
@@ -126,6 +131,7 @@ async function loadPdfFile(file) {
 }
 
 async function loadPdfUrl() {
+  if (!membership.guardUse()) return;
   const url = $('urlInput').value.trim();
   try {
     const parsed = new URL(url);
@@ -203,10 +209,20 @@ async function renderPages() {
       hit.style.top = `${y}px`;
       hit.style.width = `${width}px`;
       hit.style.height = `${height}px`;
-      const fontFamily = style.fontFamily || '';
+      const fallbackFamily = familyForPdf(style.fontFamily || item.fontName);
+      let fontFamily = fallbackFamily;
+      let originalFont;
+      try {
+        originalFont = page.commonObjs.get(item.fontName);
+        if (originalFont?.loadedName) fontFamily = `"${originalFont.loadedName}", ${fallbackFamily}`;
+      } catch { /* The PDF may use a font that cannot be exposed to canvas. */ }
+      const sampled = sampleTextStyle(canvas, x, y, width, height);
+      const fontTraits = `${item.fontName} ${style.fontFamily || ''} ${originalFont?.name || ''}`;
       hit.addEventListener('click', (event) => {
         event.stopPropagation();
-        selectHit({ page: index, x: x / scale, y: y / scale, width: width / scale, height: height / scale, text: item.str, fontSize: fontHeight / scale, fontFamily, kind: 'hit' });
+        selectHit({ page: index, x: x / scale, y: y / scale, width: width / scale, height: height / scale, text: item.str, fontSize: fontHeight / scale, fontFamily,
+          color: sampled.color, background: sampled.background, bold: Boolean(originalFont?.bold || /bold|black|heavy/i.test(fontTraits)),
+          italic: Boolean(originalFont?.italic || /italic|oblique/i.test(fontTraits)), kind: 'hit' });
       });
       hitLayer.append(hit);
     }
@@ -216,7 +232,7 @@ async function renderPages() {
       const x = clamp((event.clientX - rect.left) / scale, 0, viewport.width / scale - 5);
       const y = clamp((event.clientY - rect.top) / scale, 0, viewport.height / scale - 10);
       snapshot();
-      const patch = { id: newId(), kind: 'add', page: index, x, y, width: 95, height: 20, text: '输入新文字', fontSize: 14, fontFamily: 'Arial, "Noto Sans SC", sans-serif', color: '#242c3c', background: '#ffffff' };
+      const patch = { id: newId(), kind: 'add', page: index, x, y, width: 95, height: 20, text: '输入新文字', fontSize: 14, fontFamily: 'Arial, "Noto Sans SC", sans-serif', color: '#242c3c', background: '#ffffff', bold: false, italic: false };
       state.patchList.push(patch);
       selectPatch(patch.id);
       renderPatches();
@@ -225,10 +241,105 @@ async function renderPages() {
       setTool('edit');
     });
     if (index < 90) makeThumbnail(canvas, index);
+    renderOcrHits(index);
     renderPatchesForPage(index);
     if (index % 5 === 4) await wait(0);
   }
   $('emptyTextWarning').classList.toggle('hidden', foundText > 0);
+}
+
+function renderOcrHits(pageIndex) {
+  const wrapper = document.querySelector(`.page-wrap[data-page="${pageIndex}"]`);
+  if (!wrapper) return;
+  const hitLayer = wrapper.querySelector('.hit-layer');
+  hitLayer.querySelectorAll('.ocr-hit').forEach((el) => el.remove());
+  const scale = PAGE_SCALE * state.zoom;
+  for (const hit of state.ocrPages.get(pageIndex) || []) {
+    const element = document.createElement('div');
+    element.className = 'text-hit ocr-hit';
+    element.style.left = `${hit.x * scale}px`;
+    element.style.top = `${hit.y * scale}px`;
+    element.style.width = `${hit.width * scale}px`;
+    element.style.height = `${hit.height * scale}px`;
+    element.title = `OCR：${hit.text}`;
+    element.addEventListener('click', (event) => { event.stopPropagation(); selectHit(hit); });
+    hitLayer.append(element);
+  }
+}
+
+let tesseractLoader;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (tesseractLoader) return tesseractLoader;
+  tesseractLoader = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@6/dist/tesseract.min.js';
+    script.onload = () => window.Tesseract ? resolve(window.Tesseract) : reject(new Error('OCR 库加载失败'));
+    script.onerror = () => reject(new Error('无法下载 OCR 引擎，请检查网络'));
+    document.head.append(script);
+  }).catch((error) => { tesseractLoader = null; throw error; });
+  return tesseractLoader;
+}
+
+async function ocrVisiblePage() {
+  if (!state.pdf || state.busy) return;
+  if (!membership.guardUse()) return;
+  const viewRect = $('canvasArea').getBoundingClientRect();
+  const pages = [...document.querySelectorAll('.page-wrap')];
+  const wrapper = pages.reduce((best, node) => {
+    const rect = node.getBoundingClientRect();
+    const visibleHeight = Math.max(0, Math.min(rect.bottom, viewRect.bottom) - Math.max(rect.top, viewRect.top));
+    return visibleHeight > best.visible ? { node, visible: visibleHeight } : best;
+  }, { node: pages[0], visible: -1 }).node;
+  if (!wrapper) return;
+  const pageIndex = Number(wrapper.dataset.page);
+  const canvas = wrapper.querySelector('canvas.pdf-canvas');
+  const button = $('ocrTool');
+  button.disabled = true;
+  busy(true, `OCR 正在识别第 ${pageIndex + 1} 页（首次需要下载语言模型）…`);
+  let worker;
+  try {
+    const Tesseract = await loadTesseract();
+    worker = await Tesseract.createWorker(['eng', 'chi_sim'], 1);
+    const result = await worker.recognize(canvas, {}, { tsv: true });
+    const tsv = result.data?.tsv || '';
+    const lines = tsv.split(/\r?\n/).filter(Boolean);
+    const headers = lines.shift()?.split('\t') || [];
+    const col = (values, name) => values[headers.indexOf(name)];
+    const normalizedWidth = wrapper.clientWidth / (PAGE_SCALE * state.zoom);
+    const normalizedHeight = wrapper.clientHeight / (PAGE_SCALE * state.zoom);
+    const hits = lines.map((line) => {
+      const values = line.split('\t');
+      const text = col(values, 'text')?.trim();
+      const confidence = Number(col(values, 'conf'));
+      const left = Number(col(values, 'left'));
+      const top = Number(col(values, 'top'));
+      const width = Number(col(values, 'width'));
+      const height = Number(col(values, 'height'));
+      if (Number(col(values, 'level')) !== 5 || !text || confidence < 28 || !width || !height) return null;
+      const pixelStyle = sampleTextStyle(canvas, left / canvas.width * wrapper.clientWidth,
+        top / canvas.height * wrapper.clientHeight, width / canvas.width * wrapper.clientWidth,
+        height / canvas.height * wrapper.clientHeight);
+      return { kind: 'hit', fromOcr: true, page: pageIndex,
+        x: left / canvas.width * normalizedWidth, y: top / canvas.height * normalizedHeight,
+        width: width / canvas.width * normalizedWidth, height: height / canvas.height * normalizedHeight,
+        fontSize: clamp(height / canvas.height * normalizedHeight * .86, 6, 72),
+        fontFamily: 'Arial, "Noto Sans SC", sans-serif', bold: false, italic: false,
+        color: pixelStyle.color, background: pixelStyle.background, text };
+    }).filter(Boolean);
+    if (!hits.length) return toast('未检测到可识别的文字。可尝试更清晰的扫描件。', true);
+    state.ocrPages.set(pageIndex, hits);
+    renderOcrHits(pageIndex);
+    $('emptyTextWarning').classList.add('hidden');
+    toast(`第 ${pageIndex + 1} 页 OCR 完成：识别 ${hits.length} 个文字区域，点击紫色区域进行校对和修改。`);
+  } catch (error) {
+    console.error(error);
+    toast(`OCR 失败：${error.message}`, true);
+  } finally {
+    if (worker) await worker.terminate().catch(() => {});
+    button.disabled = false;
+    busy(false);
+  }
 }
 
 function makeThumbnail(pageCanvas, index) {
@@ -260,10 +371,36 @@ function familyForPdf(name = '') {
   return /Times|Serif|Song|Ming/i.test(name) ? 'Georgia, "Noto Serif SC", serif' : /Courier|Mono/i.test(name) ? '"Courier New", monospace' : 'Arial, "Noto Sans SC", sans-serif';
 }
 
+function sampleTextStyle(canvas, x, y, width, height) {
+  const ratio = canvas.width / (canvas.clientWidth || canvas.width);
+  const left = clamp(Math.floor(x * ratio), 0, canvas.width - 1);
+  const top = clamp(Math.floor(y * ratio), 0, canvas.height - 1);
+  const w = Math.min(canvas.width - left, Math.max(1, Math.round(width * ratio)));
+  const h = Math.min(canvas.height - top, Math.max(1, Math.round(height * ratio)));
+  const { data } = canvas.getContext('2d').getImageData(left, top, w, h);
+  const counts = new Map();
+  const jump = Math.max(1, Math.floor(Math.sqrt((w * h) / 1200)));
+  for (let py = 0; py < h; py += jump) for (let px = 0; px < w; px += jump) {
+    const i = (py * w + px) * 4;
+    if (data[i + 3] < 200) continue;
+    const rgb = [data[i], data[i + 1], data[i + 2]];
+    const key = rgb.map((v) => Math.round(v / 16) * 16).join(',');
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const sorted = [...counts].sort((a, b) => b[1] - a[1]);
+  if (!sorted.length) return { color: '#222222', background: '#ffffff' };
+  const bg = sorted[0][0].split(',').map(Number);
+  const distance = (color) => Math.hypot(color[0] - bg[0], color[1] - bg[1], color[2] - bg[2]);
+  const fgEntry = sorted.slice(1).filter(([key]) => distance(key.split(',').map(Number)) > 65).sort((a, b) => b[1] - a[1])[0];
+  const fg = fgEntry ? fgEntry[0].split(',').map(Number) : [34, 34, 34];
+  const hex = (color) => '#' + color.map((value) => clamp(value, 0, 255).toString(16).padStart(2, '0')).join('');
+  return { color: hex(fg), background: hex(bg) };
+}
+
 function selectHit(hit) {
   state.selected = hit;
-  showProperties({ ...hit, fontFamily: familyForPdf(hit.fontFamily), color: '#222222', background: '#ffffff' });
-  $('propertyStatus').textContent = '原有文字';
+  showProperties(hit);
+  $('propertyStatus').textContent = hit.fromOcr ? 'OCR 识别文字' : '原有文字';
   $('deleteEdit').classList.add('hidden');
 }
 
@@ -290,11 +427,20 @@ function showProperties(item) {
   $('propertiesForm').classList.remove('hidden');
   $('editText').value = item.text;
   $('fontSize').value = (item.fontSize || 12).toFixed(1).replace(/\.0$/, '');
-  $('fontFamily').value = item.fontFamily || 'Arial, "Noto Sans SC", sans-serif';
-  if (!$('fontFamily').value) $('fontFamily').selectedIndex = 0;
+  const selector = $('fontFamily');
+  selector.querySelectorAll('option[data-detected]').forEach((option) => option.remove());
+  const selectedFamily = item.fontFamily || 'Arial, "Noto Sans SC", sans-serif';
+  if (![...selector.options].some((opt) => opt.value === selectedFamily)) {
+    const detected = new Option('检测到的 PDF 字体（近似）', selectedFamily);
+    detected.dataset.detected = '1';
+    selector.prepend(detected);
+  }
+  selector.value = selectedFamily;
+  $('fontBold').checked = Boolean(item.bold);
+  $('fontItalic').checked = Boolean(item.italic);
   $('fontColor').value = item.color || '#222222';
   $('backgroundColor').value = item.background || '#ffffff';
-  $('matchNote').textContent = item.kind === 'hit' || item.kind === 'replace' ? '通过遮盖原文字并绘制新字来保留页面其它内容。特殊字体、复杂背景不会完全一致。' : '可在页面上拖动文字位置。导出时新文字将绘制到 PDF 内。';
+  $('matchNote').textContent = item.fromOcr ? 'OCR 位置为自动识别，文字需校对。覆盖扫描图片上的旧文字可能留下背景痕迹。' : item.kind === 'hit' || item.kind === 'replace' ? '尽量匹配检测到的字体和颜色，但特殊字体及复杂背景不保证完全一致。原文字没有被安全删除。' : '可在页面上拖动文字位置。导出时新文字将绘制到 PDF 内。';
 }
 
 function snapshot() {
@@ -307,7 +453,7 @@ function applyEdit() {
   if (!state.selected) return;
   const text = $('editText').value;
   const fontSize = clamp(Number($('fontSize').value) || 12, 5, 96);
-  const props = { text, fontSize, fontFamily: $('fontFamily').value, color: $('fontColor').value, background: $('backgroundColor').value };
+  const props = { text, fontSize, fontFamily: $('fontFamily').value, color: $('fontColor').value, background: $('backgroundColor').value, bold: $('fontBold').checked, italic: $('fontItalic').checked };
   if (!text.trim()) return toast('请输入要显示的文字。', true);
   snapshot();
   if (state.selected.kind === 'patch') {
@@ -362,7 +508,7 @@ function renderPatchesForPage(pageIndex) {
     el.style.minHeight = `${patch.height * scale}px`;
     el.style.backgroundColor = patch.kind === 'replace' ? patch.background : 'transparent';
     el.style.color = patch.color;
-    el.style.font = `${patch.fontSize * scale}px ${patch.fontFamily}`;
+    el.style.font = `${patch.italic ? 'italic' : 'normal'} ${patch.bold ? '700' : '400'} ${patch.fontSize * scale}px ${patch.fontFamily}`;
     const text = document.createElement('span');
     text.textContent = patch.text;
     el.append(text);
@@ -399,16 +545,16 @@ function renderPatchesForPage(pageIndex) {
   }
 }
 
-function rasterizeText(text, size, family, color) {
+function rasterizeText(text, size, family, color, bold = false, italic = false) {
   const factor = 3;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  ctx.font = `${size * factor}px ${family}`;
+  ctx.font = `${italic ? 'italic' : 'normal'} ${bold ? '700' : '400'} ${size * factor}px ${family}`;
   const widthPt = Math.max(2, ctx.measureText(text).width / factor + 3);
   const heightPt = size * 1.42;
   canvas.width = Math.ceil(widthPt * factor);
   canvas.height = Math.ceil(heightPt * factor);
-  ctx.font = `${size * factor}px ${family}`;
+  ctx.font = `${italic ? 'italic' : 'normal'} ${bold ? '700' : '400'} ${size * factor}px ${family}`;
   ctx.textBaseline = 'top';
   ctx.fillStyle = color;
   ctx.fillText(text, factor, Math.round(size * factor * .1));
@@ -417,6 +563,7 @@ function rasterizeText(text, size, family, color) {
 
 async function exportPdf() {
   if (!state.bytes || state.busy) return;
+  if (!membership.guardUse()) return;
   try {
     busy(true, '正在生成编辑后的 PDF…');
     const pdf = await PDFDocument.load(state.bytes.slice(), { updateMetadata: false });
@@ -427,11 +574,12 @@ async function exportPdf() {
         const hex = patch.background.replace('#', '');
         page.drawRectangle({ x: patch.x - .75, y: pageHeight - patch.y - patch.height - 1.5, width: patch.width + 1.5, height: patch.height + 2.5, color: rgb(parseInt(hex.slice(0, 2), 16) / 255, parseInt(hex.slice(2, 4), 16) / 255, parseInt(hex.slice(4, 6), 16) / 255) });
       }
-      const imageInfo = rasterizeText(patch.text, patch.fontSize, patch.fontFamily, patch.color);
+      const imageInfo = rasterizeText(patch.text, patch.fontSize, patch.fontFamily, patch.color, patch.bold, patch.italic);
       const image = await pdf.embedPng(imageInfo.data);
       page.drawImage(image, { x: patch.x, y: pageHeight - patch.y - imageInfo.height, width: imageInfo.width, height: imageInfo.height });
     }
     const result = await pdf.save();
+    if (!await membership.authorizeExport('pdf_edit')) return;
     downloadBlob(new Blob([result], { type: 'application/pdf' }), `${safeFileName(state.name)}_edited.pdf`);
     toast(`PDF 已导出${state.patchList.length ? `（包含 ${state.patchList.length} 处修改）` : ''}`);
   } catch (error) { console.error(error); toast(`导出失败：${error.message}`, true); }
@@ -466,9 +614,10 @@ async function pdfToWord(file) {
         paragraphs.push(new window.docx.Paragraph({ children: [new window.docx.TextRun({ text: line, size: 22 })], spacing: { after: 80 } }));
       }
     }
-    if (!chars) throw new Error('未检测到可复制的文字。扫描版 PDF 需要 OCR，这一版尚未提供。');
+    if (!chars) throw new Error('未检测到可复制的文字。请先在 PDF 编辑器使用「OCR 本页」识别扫描文字；目前 OCR 识别结果尚不能自动转换进 Word。');
     const wordDoc = new window.docx.Document({ sections: [{ properties: {}, children: paragraphs }] });
     const blob = await window.docx.Packer.toBlob(wordDoc);
+    if (!await membership.authorizeExport('pdf_to_word')) return;
     downloadBlob(blob, `${safeFileName(file.name)}.docx`);
     toast(`Word 文档已导出 · 提取 ${chars} 个字符`);
   } catch (error) { console.error(error); toast(`PDF 转 Word 失败：${error.message}`, true); }
@@ -528,7 +677,9 @@ async function wordToPdf(file) {
       cursorY -= para.heading ? 10 : 5;
     }
     if (!count) throw new Error('DOCX 没有可识别的文字');
-    downloadBlob(new Blob([await pdf.save()], { type: 'application/pdf' }), `${safeFileName(file.name)}.pdf`);
+    const result = await pdf.save();
+    if (!await membership.authorizeExport('word_to_pdf')) return;
+    downloadBlob(new Blob([result], { type: 'application/pdf' }), `${safeFileName(file.name)}.pdf`);
     toast(`Word 已转换为 ${pdf.getPageCount()} 页 PDF（简化排版）`);
   } catch (error) { console.error(error); toast(`Word 转 PDF 失败：${error.message}`, true); }
   finally { busy(false); }
@@ -536,6 +687,7 @@ async function wordToPdf(file) {
 
 async function processConverterFile(file) {
   if (!file || state.busy) return;
+  if (!membership.guardUse()) return;
   const isPdf = state.converter === 'pdf-word';
   if (!(file.name.toLowerCase().endsWith(isPdf ? '.pdf' : '.docx'))) return toast(`请选择 ${isPdf ? '.pdf' : '.docx'} 文件。`, true);
   if (file.size > 45 * 1024 * 1024) return toast('转换文件请小于 45MB。', true);
@@ -550,6 +702,7 @@ function attachDrop(target, handler) {
 }
 
 function showUrlModal() {
+  if (!membership.guardUse()) return;
   $('modalOverlay').classList.remove('hidden');
   $('urlInput').focus();
 }
@@ -586,6 +739,7 @@ function init() {
   $('convertDrop').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFilePicker(state.converter === 'pdf-word' ? 'pdf-convert' : 'docx'); } };
   $('selectTool').onclick = () => setTool('edit');
   $('addTool').onclick = () => setTool('add');
+  $('ocrTool').onclick = ocrVisiblePage;
   $('applyEdit').onclick = applyEdit;
   $('deleteEdit').onclick = deleteSelectedPatch;
   $('undoTool').onclick = undo;
@@ -601,3 +755,4 @@ function init() {
 }
 
 init();
+membership.init();

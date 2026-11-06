@@ -1,0 +1,72 @@
+/* PaperForge v2 membership and typography additions */
+.account-btn,.admin-shortcut{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid #e7e9f0;background:#fff;color:#5945bd;border-radius:9px;padding:10px 12px;font-size:11px;font-weight:700;white-space:nowrap;max-width:155px;overflow:hidden;text-overflow:ellipsis}
+.account-btn:hover,.admin-shortcut:hover{border-color:#c9bdfd;background:#f7f4ff}
+.account-btn svg{width:14px;height:14px}
+.admin-shortcut{color:#fff;background:#2c3157;border-color:#2c3157}
+.membership-modal{width:min(480px,94vw);max-height:90vh;overflow:auto;background:#fff;border-radius:22px;box-shadow:0 35px 90px #060b1e60;position:relative;padding:29px}
+.member-hero{text-align:center;display:flex;align-items:center;flex-direction:column;gap:11px;padding:5px 0 18px}
+.member-hero.left{text-align:left;align-items:flex-start;gap:8px}
+.member-hero-icon{height:49px;width:49px;border-radius:14px;background:linear-gradient(140deg,#8c78fc,#6550d7);box-shadow:0 8px 24px #866ff559;color:white;display:grid;place-items:center}
+.member-hero-icon svg{height:25px;width:25px}
+.member-hero small{font-size:9px;letter-spacing:1.7px;font-weight:800;color:#8b7bd6}
+.member-hero h2{font-size:22px;margin:0;color:#19243a;letter-spacing:-.5px}
+.member-hero p{color:#8a94a9;font-size:12px;line-height:1.8;margin:0}
+.google-btn{margin-top:5px;display:flex;align-items:center;justify-content:center;gap:13px;width:100%;border:1px solid #dee3ed;background:#fff;border-radius:11px;padding:13px 17px;color:#29374f;font-size:13px;font-weight:700;box-shadow:0 2px 9px #0f1e3410}
+.google-btn:hover:not(:disabled){background:#f8f9ff;border-color:#b9b0ef}
+.google-g{font-weight:800;font-size:19px;color:#4285f4}
+.member-trust{margin-top:20px;display:flex;align-items:center;justify-content:center;gap:9px;color:#9ca6b7;font-size:10px}
+.member-trust svg{width:13px;height:13px;color:#4db98f}
+.membership-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:5px 0 12px}
+.membership-stats>div{background:#f6f5ff;border:1px solid #ece9ff;padding:15px;border-radius:12px;display:flex;flex-direction:column;gap:8px}
+.membership-stats small{color:#9891bc;font-size:10px}
+.membership-stats strong{font-size:17px;color:#5e4bc2}
+.member-expiry{border-radius:8px;background:#ecfbf5;color:#358964;font-size:11px;padding:9px 12px;margin-bottom:12px}
+.membership-payment{border:1px solid #e8eaf1;border-radius:14px;padding:17px;margin-top:10px;background:linear-gradient(180deg,#fff,#fdfdff)}
+.membership-payment-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.membership-payment-head strong{font-size:14px;color:#202d47}
+.membership-payment-head p{font-size:10.5px;color:#9ba5b8;margin:7px 0 0}
+.membership-payment .price{font-size:23px;font-weight:800;color:#7055ed;white-space:nowrap}
+.membership-payment .price small{font-size:10px;font-weight:500;color:#a3a8b7}
+.qr-placeholder,.payment-qr{width:165px;height:165px;margin:20px auto 13px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;border:1px dashed #c8c4e6;border-radius:11px;background:#f6f5fe;color:#9587d3;font-size:10px;text-align:center;object-fit:contain;padding:8px}
+.qr-placeholder svg{width:29px;height:29px}
+.qr-guide{font-size:10.5px;color:#8e99ab;line-height:1.8;margin:9px 0 14px;text-align:center}
+.payment-ref-label{font-size:10px;font-weight:700;color:#56637e;display:block;margin-bottom:7px}
+.payment-reference{width:100%;border:1px solid #dfe3ec;border-radius:9px;padding:11px;font-size:12px;outline:none}
+.payment-reference:focus{border-color:#8e7cf1;box-shadow:0 0 0 3px #7059f317}
+.pay-request-btn{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;margin-top:11px;border:0;background:#725af2;color:white;padding:12px;border-radius:9px;font-weight:700;font-size:12px}
+.pay-request-btn svg{width:15px;height:15px}
+.pending-indicator{background:#fff8e7;color:#9a7a38;border-radius:9px;padding:13px;text-align:center;font-size:11px;display:flex;align-items:center;justify-content:center;gap:7px}
+.pending-indicator svg{width:16px;height:16px}
+.signout-btn{background:none;border:0;color:#9ea6b9;text-decoration:underline;margin:17px auto 0;display:block;font-size:11px}
+.admin-modal{width:min(960px,95vw);max-height:91vh;overflow:auto;background:#fff;border-radius:21px;padding:32px;position:relative;box-shadow:0 35px 90px #070c1e50}
+.admin-heading{display:flex;align-items:center;gap:16px;margin-bottom:24px}
+.admin-heading-icon{width:51px;height:51px;display:grid;place-items:center;background:#ebe7ff;color:#6f57e8;border-radius:15px}
+.admin-heading-icon svg{width:24px;height:24px}
+.admin-heading small{color:#8b75e4;font-size:9px;letter-spacing:2px;font-weight:800}
+.admin-heading h2{font-size:24px;letter-spacing:-.7px;margin:4px 0}
+.admin-heading p{font-size:11px;color:#9da7b8;margin:0}
+.admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}
+.admin-stats>div{border:1px solid #e6e8f1;border-radius:11px;background:#fafbfe;padding:16px;display:flex;flex-direction:column;gap:6px}
+.admin-stats small{font-size:11px;color:#9ba5b8}
+.admin-stats strong{font-size:27px;color:#25334d}
+.admin-body h3{font-size:14px;margin:26px 0 12px;display:flex;justify-content:space-between}
+.admin-body h3 span{font-size:11px;color:#9ba5b5;font-weight:400}
+.admin-list{border:1px solid #e8eaf1;border-radius:12px;overflow:hidden;max-height:280px;overflow-y:auto}
+.admin-request{display:flex;align-items:center;justify-content:space-between;gap:13px;padding:13px 15px;border-bottom:1px solid #eef0f5}
+.admin-request:last-child{border-bottom:0}
+.admin-request strong{font-size:11.5px;display:block;overflow-wrap:anywhere}
+.admin-request small{font-size:10px;color:#9ba5b5;display:block;margin-top:6px;line-height:1.5}
+.admin-row-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0}
+.admin-row-actions button{border:1px solid #dfe3ed;background:#fff;color:#58657b;border-radius:7px;font-size:10px;padding:7px 10px}
+.admin-row-actions button.admin-approve{border-color:#cfe9dc;color:#29845d;background:#edf9f2}
+.admin-row-actions button:hover{filter:brightness(.97)}
+.admin-empty,.admin-loading{padding:20px;color:#a0a9b9;font-size:12px}
+.admin-footer-note{color:#a5adba;font-size:10px;line-height:1.6;margin-top:18px}
+.font-flags{display:flex;gap:14px;align-items:center;margin:2px 0 5px}
+.font-flags label{font-size:11px;display:flex;align-items:center;gap:6px;color:#68758c}
+.font-flags input{accent-color:#725cf3}
+.text-hit.ocr-hit{background:#725af31b;outline:1px dashed #725af388}
+.text-hit.ocr-hit:hover{background:#725af344}
+@media(max-width:1100px){.top-actions{gap:5px}.account-btn,.admin-shortcut{padding:8px;font-size:10px}.local-badge{display:none}}
+@media(max-width:850px){.account-btn{max-width:110px}.topbar{padding:0 10px}}
+@media(max-width:650px){.account-btn{max-width:78px;font-size:0;padding:8px}.account-btn svg{width:17px;height:17px}.admin-shortcut{padding:8px;font-size:9px}.membership-modal{padding:20px}.admin-modal{padding:23px 16px}.admin-request{flex-direction:column;align-items:stretch}.admin-row-actions{justify-content:flex-start}.font-flags{grid-column:1/-1}}
