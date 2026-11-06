@@ -70,7 +70,16 @@ function busy(value, message = '') {
   document.querySelectorAll('button').forEach((button) => {
     if (button.dataset.busyLock === '1') button.disabled = value;
   });
-  if (message) toast(message);
+  const overlay = $('progressOverlay');
+  if (overlay) {
+    overlay.classList.toggle('hidden', !value);
+    document.body.classList.toggle('processing-document', value);
+    if (value && message) {
+      $('progressTitle').textContent = /OCR|识别|扫描/.test(message) ? '正在识别 PDF 文字'
+        : /Word|转换|版面/.test(message) ? '正在转换文档' : '正在处理文件';
+      $('progressMessage').textContent = message;
+    }
+  }
   $('topExport').disabled = !state.pdf || value;
   $('editorExport').disabled = !state.pdf || value;
 }
@@ -379,10 +388,16 @@ function loadTesseract() {
 async function getOcrWorker() {
   if (cachedOcrWorker) return cachedOcrWorker;
   const Tesseract = await loadTesseract();
-  try { cachedOcrWorker = await Tesseract.createWorker(['eng', 'chi_sim'], 1); }
+  const logger = (event) => {
+    if (!state.busy || !$('progressMessage')) return;
+    const percent = Number.isFinite(event.progress) ? `${Math.round(event.progress * 100)}%` : '';
+    const operation = /recogniz/i.test(event.status) ? '正在识别文字' : '正在加载 OCR 模型';
+    $('progressMessage').textContent = `${operation}${percent ? ` · ${percent}` : ''}。首次载入可能需要较长时间…`;
+  };
+  try { cachedOcrWorker = await Tesseract.createWorker(['eng', 'chi_sim'], 1, { logger }); }
   catch (languageError) {
     console.warn('中英 OCR 模型加载失败，降级为英语', languageError);
-    cachedOcrWorker = await Tesseract.createWorker('eng', 1);
+    cachedOcrWorker = await Tesseract.createWorker('eng', 1, { logger });
   }
   return cachedOcrWorker;
 }
@@ -412,7 +427,9 @@ function mergeOcrWordsIntoLines(boxes) {
     };
     for (const box of row.items) {
       const last = chunk[chunk.length - 1];
-      if (last && box.x - last.x - last.w > Math.max(30, box.h * 2.5)) flush();
+      // Large horizontal gaps are independent fields, even on the same baseline.
+      // Never let a distant label be repainted when only one value is edited.
+      if (last && box.x - last.x - last.w > Math.max(16, box.h * 1.55)) flush();
       chunk.push(box);
     }
     flush();
@@ -461,7 +478,7 @@ function ocrBoxes(result) {
       };
       for (const word of parts) {
         const previous = segment[segment.length - 1];
-        if (previous && word.x - previous.x - previous.w > Math.max(26, word.h * 2.5)) flush();
+        if (previous && word.x - previous.x - previous.w > Math.max(16, word.h * 1.55)) flush();
         segment.push(word);
       }
       flush();
@@ -474,12 +491,9 @@ function ocrBoxes(result) {
   const walk = (node) => {
     if (!node) return;
     if (Array.isArray(node)) { node.forEach(walk); return; }
-    if (node.words?.length && node.text?.trim() && node.bbox) {
-      const box = node.bbox;
-      blockLines.push({ text: node.text.trim(), x: box.x0, y: box.y0,
-        w: box.x1 - box.x0, h: box.y1 - box.y0 });
-      return;
-    }
+    // The 'blocks' tree often contains a large whole-line bbox as well as
+    // precise word bboxes. Always descend to words; using the parent line box
+    // is what accidentally selected 'as stakeholder' and 'Pay to landlord' together.
     if (node.lines?.length) return node.lines.forEach(walk);
     if (node.paragraphs?.length) return node.paragraphs.forEach(walk);
     if (node.blocks?.length) return node.blocks.forEach(walk);
@@ -534,12 +548,19 @@ function highContrastOcrCanvas(source) {
 }
 
 function nativeTextBoxes(page, content) {
-  return pdfLayoutLines(page, content).filter((line) => line.parts.length).map((line) => {
-    const text = line.parts.map((part) => part.text).join(' ').trim();
-    const right = Math.max(...line.parts.map((part) => part.x + (part.width || part.text.length * part.fontSize * .5)));
-    return { text, x: line.x, y: line.y,
-      w: Math.max(8, right - line.x), h: Math.max(8, line.fontSize * 1.25) };
-  }).filter((line) => line.text);
+  // Do not concatenate every fragment at the same Y coordinate. PDF forms
+  // frequently have unrelated fields sharing a baseline but separated by
+  // hundreds of pixels. Each PDF.js text item is an independent target.
+  const viewport = page.getViewport({ scale: 1 });
+  return content.items.filter((item) => item.str?.trim()).map((item) => {
+    const matrix = pdfjsLib.Util.transform(viewport.transform, item.transform);
+    const fontSize = Math.hypot(matrix[2], matrix[3]);
+    const style = content.styles?.[item.fontName] || {};
+    const ascent = (typeof style.ascent === 'number' ? style.ascent : .82) * fontSize;
+    return { text: item.str.trim(), x: matrix[4], y: matrix[5] - ascent,
+      w: Math.max(5, item.width || item.str.length * fontSize * .48),
+      h: Math.max(5, fontSize * 1.18) };
+  });
 }
 
 async function ocrVisiblePage() {
@@ -556,9 +577,10 @@ async function ocrVisiblePage() {
   const pageIndex = Number(wrapper.dataset.page);
   const button = $('ocrTool');
   button.disabled = true;
-  busy(true, `OCR 正在高分辨率扫描第 ${pageIndex + 1} 页（首次需要下载语言模型）…`);
+  busy(true, `OCR 第 ${pageIndex + 1} 页：正在初始化中英文识别引擎（首次使用需下载模型）…`);
   try {
     const worker = await getOcrWorker();
+    busy(true, `OCR 第 ${pageIndex + 1} 页：正在渲染高清扫描图像…`);
     const pdfPage = await state.pdf.getPage(pageIndex + 1);
     const natural = pdfPage.getViewport({ scale: 1 });
     const maxPixels = window.matchMedia('(max-width: 900px)').matches ? 4_000_000 : 10_000_000;
@@ -574,6 +596,7 @@ async function ocrVisiblePage() {
       background: 'rgb(255,255,255)' }).promise;
     const outputs = { text: true, tsv: true, blocks: true, hocr: true };
     await worker.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '1' });
+    busy(true, `OCR 第 ${pageIndex + 1} 页：正在定位中文、英文和数字的文字区域…`);
     let recognition = await worker.recognize(ocrCanvas, {}, outputs);
     let boxes = ocrBoxes(recognition);
     let sourceCanvas = ocrCanvas;
@@ -621,7 +644,7 @@ async function ocrSelectedRegion() {
     return toast('请先点击「框选改字」，在 PDF 上框住一个单独的文字区域。', true);
   }
   if (!membership.guardUse()) return;
-  busy(true, '正在识别选定的文字区域…');
+  busy(true, 'OCR 选区：正在载入文字识别引擎…');
   try {
     const worker = await getOcrWorker();
     const page = await state.pdf.getPage(selection.page + 1);
@@ -641,6 +664,7 @@ async function ocrSelectedRegion() {
     crop.width = Math.round(w);
     crop.height = Math.round(h);
     crop.getContext('2d').drawImage(fullCanvas, x, y, w, h, 0, 0, crop.width, crop.height);
+    busy(true, 'OCR 选区：正在识别所选文字，请稍候…');
     await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
     let recognition = await worker.recognize(crop);
     if (!recognition.data.text?.trim()) {
@@ -720,6 +744,7 @@ function sampleTextStyle(canvas, x, y, width, height) {
 function selectHit(hit) {
   state.selected = hit;
   showProperties(hit);
+  setPropertyDrawer(true);
   $('propertyStatus').textContent = hit.fromManual ? '手动框选区域' : hit.fromOcr ? 'OCR 识别文字' : '原有文字';
   $('deleteEdit').classList.add('hidden');
 }
@@ -728,6 +753,7 @@ function selectPatch(id) {
   const patch = state.patchList.find((item) => item.id === id);
   if (!patch) return;
   state.selected = { kind: 'patch', id };
+  setPropertyDrawer(true);
   if (patch.kind === 'signature') {
     $('noSelection').classList.add('hidden');
     $('propertiesForm').classList.remove('hidden');
@@ -743,10 +769,22 @@ function selectPatch(id) {
 
 function clearSelection() {
   state.selected = null;
+  setPropertyDrawer(false);
   $('noSelection').classList.remove('hidden');
   $('propertiesForm').classList.add('hidden');
   $('propertyStatus').textContent = '无选中项目';
   document.querySelectorAll('.patch-item.active').forEach((node) => node.classList.remove('active'));
+}
+
+function setPropertyDrawer(expanded) {
+  const panel = document.querySelector('.properties');
+  if (!panel) return;
+  panel.classList.toggle('is-expanded', Boolean(expanded));
+  const toggle = $('propertiesToggle');
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(Boolean(expanded)));
+    toggle.textContent = expanded ? '收起 ↑' : '展开 ↓';
+  }
 }
 
 function showProperties(item) {
@@ -1017,6 +1055,7 @@ async function exportPdf() {
       page.drawImage(image, { x: patch.x, y: pageHeight - patch.y - imageInfo.height, width: imageInfo.width, height: imageInfo.height });
     }
     const result = await pdf.save();
+    busy(false);
     if (!await membership.authorizeExport('pdf_edit')) return;
     downloadBlob(new Blob([result], { type: 'application/pdf' }), `${safeFileName(state.name)}_edited.pdf`);
     toast(`PDF 已导出${state.patchList.length ? `（包含 ${state.patchList.length} 处修改）` : ''}`);
@@ -1070,6 +1109,7 @@ async function pdfToWord(file) {
     const result = mode === 'editable'
       ? await pdfToPositionedWord(input)
       : await pdfToVisualPageWord(input);
+    busy(false);
     if (!await membership.authorizeExport('pdf_to_word')) return;
     downloadBlob(result.blob, `${safeFileName(file.name)}_${mode === 'visual' ? '原貌保真版' : '固定版式可编辑'}.docx`);
     toast(mode === 'visual' ? `已生成 ${result.pages} 页原貌 Word（每页图像；文字不可编辑）。`
@@ -1084,6 +1124,7 @@ async function pdfToVisualPageWord(input) {
   const frames = [];
   let widthPt, heightPt;
   for (let pageNumber = 1; pageNumber <= input.numPages; pageNumber++) {
+    busy(true, `PDF → Word：正在渲染第 ${pageNumber} / ${input.numPages} 页（原貌保真）…`);
     const page = await input.getPage(pageNumber);
     const size = page.getViewport({ scale: 1 });
     if (pageNumber === 1) { widthPt = size.width; heightPt = size.height; }
@@ -1125,6 +1166,7 @@ async function pdfToPositionedWord(input) {
   let widthPt = 595.28, heightPt = 841.89;
   const docx = window.docx;
   for (let pageNumber = 1; pageNumber <= input.numPages; pageNumber++) {
+    busy(true, `PDF → Word：第 ${pageNumber} / ${input.numPages} 页，重建文字定位…`);
     const page = await input.getPage(pageNumber);
     const natural = page.getViewport({ scale: 1 });
     if (pageNumber === 1) { widthPt = natural.width; heightPt = natural.height; }
@@ -1137,7 +1179,10 @@ async function pdfToPositionedWord(input) {
       frames.push(null);
     }
     const content = await page.getTextContent();
-    const lines = pdfLayoutLines(page, content);
+    // One anchored Word frame per PDF text fragment. The old algorithm joined
+    // separate labels sharing one baseline into a single unspaced paragraph,
+    // causing large shifts in contracts and tables.
+    const textItems = content.items.filter((item) => item.str?.trim());
 
     const scale = Math.min(1.8, Math.sqrt(5_000_000 / (natural.width * natural.height)));
     const viewport = page.getViewport({ scale });
@@ -1174,20 +1219,26 @@ async function pdfToPositionedWord(input) {
       spacing: { before: 0, after: 0 },
     }));
     frames.push({ x: 0, y: 0, w: widthPt, h: heightPt });
-    for (const line of lines) {
-      if (!line.parts.length || !line.parts.some((part) => part.text.trim())) continue;
-      const runs = line.parts.map((part) => {
-        chars += part.text.length;
-        return new docx.TextRun({ text: part.text, size: Math.round(part.fontSize * 2),
-          font: familyForPdf(part.fontName).includes('Georgia') ? 'Times New Roman' : 'Arial',
-          bold: /bold|black|heavy/i.test(part.fontName),
-          italics: /italic|oblique/i.test(part.fontName) });
-      });
-      paragraphs.push(new docx.Paragraph({ children: runs,
-        spacing: { before: 0, after: 0, line: Math.round(line.fontSize * 1.16 * 20), lineRule: 'exact' },
-      }));
-      frames.push({ x: Math.max(0, line.x), y: Math.max(0, line.y),
-        w: Math.max(10, widthPt - line.x - 2), h: Math.max(13, line.fontSize * 1.7) });
+    for (const item of textItems) {
+      const transform = pdfjsLib.Util.transform(natural.transform, item.transform);
+      const fontSize = clamp(Math.hypot(transform[2], transform[3]), 5, 56);
+      const style = content.styles?.[item.fontName] || {};
+      const ascent = (typeof style.ascent === 'number' ? style.ascent : .82) * fontSize;
+      const x = Math.max(0, transform[4]);
+      const y = Math.max(0, transform[5] - ascent);
+      const width = Math.max(9, item.width || item.str.length * fontSize * .48);
+      chars += item.str.length;
+      const familyName = style.fontFamily || item.fontName || '';
+      paragraphs.push(new docx.Paragraph({ children: [new docx.TextRun({
+        text: item.str, size: Math.round(fontSize * 2),
+        font: familyForPdf(familyName).includes('Georgia') ? 'Times New Roman' : 'Arial',
+        bold: /bold|black|heavy/i.test(familyName),
+        italics: /italic|oblique/i.test(familyName),
+      })], spacing: { before: 0, after: 0, line: Math.round(fontSize * 1.16 * 20), lineRule: 'exact' } }));
+      // The small buffer accommodates Word's different font metrics without
+      // allowing unrelated text farther right to join this edit box.
+      frames.push({ x, y, w: Math.min(widthPt - x, width + Math.max(5, fontSize * .65)),
+        h: Math.max(13, fontSize * 1.75) });
     }
     if (pageNumber % 2 === 0) await wait(0);
   }
@@ -1331,18 +1382,28 @@ async function loadHtmlCanvas() {
 }
 
 async function renderDocxToPdf(file) {
+  busy(true, 'Word → PDF：正在加载文档排版组件…');
   const preview = await loadDocxPreview();
   await loadHtmlCanvas();
   const host = document.createElement('div');
   host.className = 'docx-render-host';
-  host.style.cssText = 'position:fixed;left:-15000px;top:0;width:max-content;z-index:-10;pointer-events:none';
+  // html2canvas cannot safely capture a document placed thousands of pixels
+  // outside the viewport (a frequent cause of completely white exports).
+  // Keep the capture stage in the viewport and beneath the processing modal.
+  // A negative stacking level can also cause the renderer to omit its content.
+  host.style.cssText = 'position:fixed;left:0;top:0;width:max-content;z-index:70;pointer-events:none;isolation:isolate';
   document.body.append(host);
   try {
+    busy(true, 'Word → PDF：正在还原 DOCX 样式、表格及图片…');
     await preview.renderAsync(await file.arrayBuffer(), host, null, {
       inWrapper: true, breakPages: true, ignoreLastRenderedPageBreak: false,
       renderHeaders: true, renderFooters: true, renderComments: false,
     });
     await document.fonts.ready;
+    await Promise.all([...host.querySelectorAll('img')].map((img) => img.complete ? Promise.resolve()
+      : new Promise((resolve) => { img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+        setTimeout(resolve, 4500); })));
     const sections = [...host.querySelectorAll('section.docx')];
     if (!sections.length) throw new Error('未能读取 Word 页面');
     const pdf = await PDFDocument.create();
@@ -1357,16 +1418,31 @@ async function renderDocxToPdf(file) {
       const contentHeight = Math.max(element.scrollHeight, element.clientHeight);
       const sectionsToPrint = Math.max(1, Math.ceil((contentHeight - 3) / pageCssHeight));
       if (sectionsToPrint > 120) throw new Error('Word 内容超出可转换页数');
-      const bounds = element.getBoundingClientRect();
       for (let slice = 0; slice < sectionsToPrint; slice++) {
+        busy(true, `Word → PDF：正在绘制第 ${index + 1} 个章节 · 第 ${slice + 1} / ${sectionsToPrint} 页…`);
         const yOffset = slice * pageCssHeight;
         const sliceHeight = Math.min(pageCssHeight, contentHeight - yOffset);
         const canvas = await window.html2canvas(element, {
           scale: Math.min(1.6, Math.max(1.1, 1280 / element.clientWidth)),
-          x: bounds.left, y: bounds.top + yOffset, width: element.clientWidth,
+          x: 0, y: yOffset, width: element.clientWidth,
           height: sliceHeight, backgroundColor: '#ffffff', useCORS: false, logging: false,
+          scrollX: 0, scrollY: 0,
+          windowWidth: Math.max(window.innerWidth, element.scrollWidth + 16),
+          windowHeight: Math.max(window.innerHeight, Math.ceil(pageCssHeight) + 16),
         });
         if (!canvas.width || !canvas.height) throw new Error('Word 页面截图为空');
+        // Fail closed: don't charge an export or download an empty document.
+        const check = document.createElement('canvas');
+        check.width = 100; check.height = 100;
+        check.getContext('2d').drawImage(canvas, 0, 0, 100, 100);
+        const pixels = check.getContext('2d').getImageData(0, 0, 100, 100).data;
+        let ink = 0;
+        for (let j = 0; j < pixels.length; j += 4) {
+          if (Math.min(pixels[j], pixels[j + 1], pixels[j + 2]) < 238) ink++;
+        }
+        if (ink < 3 && (element.innerText?.trim() || element.querySelector('img,svg,canvas'))) {
+          throw new Error(`第 ${index + 1} 个章节第 ${slice + 1} 页渲染为空白。已取消导出以避免生成丢字文件。`);
+        }
         const jpg = await pdf.embedJpg(canvas.toDataURL('image/jpeg', .92));
         const pageWidth = element.clientWidth * .75, pageHeight = pageCssHeight * .75;
         const target = pdf.addPage([pageWidth, pageHeight]);
@@ -1383,13 +1459,13 @@ async function wordToPdf(file) {
   busy(true, '正在用增强版面引擎处理 Word（首次需要下载组件）…');
   try {
     const result = await renderDocxToPdf(file);
+    busy(false);
     if (!await membership.authorizeExport('word_to_pdf')) return;
     downloadBlob(new Blob([result.bytes], { type: 'application/pdf' }), `${safeFileName(file.name)}.pdf`);
     toast(`已生成 ${result.pages} 页 PDF。新版尝试保留段落、表格与页眉页脚；复杂 Word 仍建议用原软件导出。`);
   } catch (error) {
-    console.warn('Word 增强排版失败，尝试基础转换', error);
-    toast('增强排版不可用，正在尝试基本转换（版面可能变化）…', true);
-    await legacyWordToPdf(file);
+    console.error('Word 版面处理失败', error);
+    toast(`Word 转 PDF 未导出：${error.message}。已停止低保真回退，避免交付空白或严重走版文件。`, true);
   } finally { busy(false); }
 }
 
@@ -1509,6 +1585,15 @@ function showUrlModal() {
 }
 
 function init() {
+  const drawerButton = document.createElement('button');
+  drawerButton.id = 'propertiesToggle';
+  drawerButton.type = 'button';
+  drawerButton.className = 'properties-toggle';
+  drawerButton.textContent = '展开 ↓';
+  drawerButton.setAttribute('aria-controls', 'propertiesForm');
+  drawerButton.setAttribute('aria-expanded', 'false');
+  drawerButton.onclick = () => setPropertyDrawer(!document.querySelector('.properties').classList.contains('is-expanded'));
+  document.querySelector('.property-top').append(drawerButton);
   setupSignaturePad();
   const converterPdfInput = document.createElement('input');
   converterPdfInput.type = 'file';

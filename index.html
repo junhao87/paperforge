@@ -45,7 +45,7 @@
         <div id="currentDocument" class="doc-status"><div class="doc-icon"><svg><use href="#ic-file"/></svg></div><div><strong>尚未选择文件</strong><small>PDF / DOCX</small></div></div>
       </div>
       <div class="side-bottom"><div class="privacy-mark"><svg><use href="#ic-shield"/></svg></div><strong>Private by design</strong><p>文件在浏览器本地处理，不会自动上传到服务器。</p><span class="private-chip"><i></i> LOCAL PROCESSING</span></div>
-      <div class="side-footer">PaperForge <span>v2.3 • Beta</span></div>
+      <div class="side-footer">PaperForge <span>v2.4 • Beta</span></div>
     </aside>
 
     <div class="app-main">
@@ -53,7 +53,7 @@
 
       <section class="welcome" id="welcome">
         <div class="hero-glow"></div>
-        <div class="hero-kicker"><span class="sparkle">✦</span> YOUR DOCUMENT, YOUR CONTROL <span class="hero-kicker-line"></span> PaperForge v2.3 Beta</div>
+        <div class="hero-kicker"><span class="sparkle">✦</span> YOUR DOCUMENT, YOUR CONTROL <span class="hero-kicker-line"></span> PaperForge v2.4 Beta</div>
         <h1>让每一份文档<br /><em>恰如你所想。</em></h1>
         <p class="hero-description">编辑 PDF 原有文字、添加新内容、转换 Word 格式。<br />Google 登录后赠送一次导出，Premium RM10/月。</p>
         <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传 PDF 文件"><div class="upload-illustration"><div class="upload-back"></div><div class="upload-front"><svg><use href="#ic-file"/></svg><span>PDF</span></div><div class="upload-circle"><svg><use href="#ic-plus"/></svg></div></div><strong>拖放 PDF 到这里，或点击上传</strong><span>支持 PDF 文件 · 建议小于 30MB</span><button class="choose-btn" id="heroUpload">选择文件 <svg><use href="#ic-arrow"/></svg></button></div>
@@ -67,12 +67,21 @@
       </section>
 
       <section class="converter hidden" id="converter"><div class="converter-head"><span class="converter-kicker">DOCUMENT CONVERTER</span><h2 id="converterTitle">PDF 转 Word</h2><p id="converterDescription">保留版面外观，或生成可编辑文字。</p></div><div id="pdfModeOptions" class="convert-mode"><label><input type="radio" name="pdfMode" value="visual" checked/><strong>原貌保真</strong><small>逐页保留原 PDF 外观，但 Word 中为整页图像，文字不可编辑</small></label><label><input type="radio" name="pdfMode" value="editable"/><strong>固定版式可编辑</strong><small>原页面图形 + 可编辑定位文字，尽量保留布局；内容改长可能溢出文字框</small></label></div><div class="convert-drop" id="convertDrop" tabindex="0" role="button"><span class="convert-graphic"><svg><use href="#ic-layers"/></svg></span><h3 id="convertDropTitle">上传 PDF 文件</h3><p id="convertHelp">拖动文件到此处，或者点击选择</p><button id="convertChoose">选择文件 <svg><use href="#ic-arrow"/></svg></button></div><div class="converter-notice"><svg><use href="#ic-shield"/></svg><div><strong>关于转换保真度</strong><p id="converterNotice">纯浏览器无法对所有复杂 PDF 保证与 Word 完全同版。</p></div></div></section>
-      <footer class="mobile-footer">PaperForge · 本地处理 · v2.3 Beta</footer>
+      <footer class="mobile-footer">PaperForge · 本地处理 · v2.4 Beta</footer>
     </div>
   </div>
 
   <div id="modalOverlay" class="modal-overlay hidden"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><button class="modal-close" id="closeModal" aria-label="关闭"><svg><use href="#ic-close"/></svg></button><div class="modal-icon"><svg><use href="#ic-link"/></svg></div><h3 id="modalTitle">通过 URL 打开 PDF</h3><p>粘贴可公开访问的 PDF 直链。对方网站必须允许浏览器跨域读取（CORS）。</p><label for="urlInput">PDF 地址</label><input type="url" id="urlInput" placeholder="https://example.com/document.pdf" /><button class="modal-confirm" id="loadUrl">打开文档 <svg><use href="#ic-arrow"/></svg></button></div></div>
   <div id="signatureOverlay" class="modal-overlay hidden"><div class="modal signature-modal" role="dialog" aria-modal="true" aria-labelledby="signatureTitle"><button class="modal-close" id="closeSignature" aria-label="关闭"><svg><use href="#ic-close"/></svg></button><div class="modal-icon"><svg><use href="#ic-sign"/></svg></div><h3 id="signatureTitle">创建手写签名</h3><p>直接用手指、触控笔或鼠标签名。无需 OCR，扫描 PDF 也能签。</p><canvas id="signatureCanvas" width="650" height="240" aria-label="签名绘制区域"></canvas><div class="signature-actions"><button id="clearSignature" type="button">清除重写</button><button id="useSignature" type="button">手动点位置</button><button id="placeSignatureNow" type="button">直接放到本页</button></div><p>放置后可拖动和调整大小。此为手写签名图像，不是数字证书签署。</p></div></div>
+  <div id="progressOverlay" class="progress-overlay hidden" role="status" aria-live="polite" aria-atomic="true">
+    <div class="progress-card">
+      <div class="progress-symbol"><span class="progress-spinner"></span><svg><use href="#ic-file"/></svg></div>
+      <strong id="progressTitle">正在处理文件</strong>
+      <p id="progressMessage">请稍候，正在准备文件…</p>
+      <div class="progress-track"><span></span></div>
+      <small>请保持页面开启，处理完成后会自动关闭此窗口。</small>
+    </div>
+  </div>
   <div id="toast" class="toast hidden" role="status"></div>
   <input id="fileInput" class="hidden" type="file" accept=".pdf,application/pdf" />
   <input id="wordInput" class="hidden" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
