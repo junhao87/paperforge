@@ -232,9 +232,9 @@ class Membership {
       <div class="membership-stats"><div><small>当前权限</small><strong>${esc(plan || (p.plan === 'suspended' ? 'Suspended' : 'Free Trial'))}</strong></div><div><small>剩余免费导出</small><strong>${remaining}</strong></div></div>
       ${plan === 'Premium' && p.premium_expires_at ? `<div class="member-expiry">有效期至 ${shortDate(p.premium_expires_at)}</div>` : ''}
       <div class="membership-payment"><div class="membership-payment-head"><div><strong>Premium Access</strong><p>可在有效期内不限次数导出</p></div><div class="price">RM ${config.monthlyPrice}<small>/ 月</small></div></div>
-        ${qr}<p class="qr-guide">扫码付款后，在下方填写转账参考编号或付款人姓名。管理员核款后人工开通 30 天权限。</p>
-        ${this.pendingRequests.length ? `<div class="pending-indicator">${icon('check')} 付款通知已提交，等待管理员核款</div>` : `<label class="payment-ref-label" for="paymentReference">转账参考编号 / 付款人姓名</label>
-        <input id="paymentReference" class="payment-reference" maxlength="120" placeholder="例如 Transfer 123456 / Jun Hao" />
+        ${qr}<p class="qr-guide">完成 DuitNow 转账后，请使用当前登录的 Gmail 提交通知。管理员根据付款情况手动核实并开通 30 天权限。</p>
+        ${this.pendingRequests.length ? `<div class="pending-indicator">${icon('check')} 付款通知已提交，等待管理员核款</div>` : `<label class="payment-ref-label" for="paymentReference">付款 Gmail</label>
+        <input id="paymentReference" class="payment-reference" maxlength="120" type="email" value="${esc(this.user.email)}" readonly title="付款通知绑定当前 Google 登录邮箱" />
         <button class="pay-request-btn" data-action="submit-payment">已完成付款，提交审核 ${icon('arrow')}</button>`}
       </div><button class="signout-btn" data-action="logout">退出登录</button>`;
     $('adminOverlay').classList.add('hidden');
@@ -245,7 +245,7 @@ class Membership {
     if (!this.client || !this.user) return;
     if (!config.paymentQrImage) return this.notify('管理员尚未提供收款 QR Code，付款功能暂不可用。', true);
     const ref = $('paymentReference')?.value.trim();
-    if (!ref || ref.length < 2) return this.notify('请填写转账参考编号或付款人姓名。', true);
+    if (!ref || ref !== this.user.email) return this.notify('请先使用正确的 Google 邮箱登录。', true);
     const { error } = await this.client.from('pf_payment_requests').insert({
       user_id: this.user.id, amount: config.monthlyPrice, currency: config.currency, payment_reference: ref,
     });
