@@ -15,7 +15,7 @@ const pdfAssetOptions = {
 
 const state = {
   name: '', bytes: null, pdf: null, textPages: [], patchList: [], undoStack: [],
-  selected: null, tool: 'edit', zoom: 1, renderId: 0, view: 'home',
+  selected: null, preview: null, tool: 'edit', zoom: 1, renderId: 0, view: 'home',
   converter: 'pdf-word', busy: false, ocrPages: new Map(), signatureData: null,
 };
 
@@ -128,6 +128,7 @@ async function openPdf(bytes, name) {
   state.patchList = [];
   state.undoStack = [];
   state.selected = null;
+  state.preview = null;
   state.textPages = [];
   state.ocrPages = new Map();
   state.signatureData = null;
@@ -747,17 +748,22 @@ function sampleTextStyle(canvas, x, y, width, height) {
 }
 
 function selectHit(hit) {
+  const hadPreview = Boolean(state.preview);
+  state.preview = null;
   state.selected = hit;
   showProperties(hit);
   setPropertyDrawer(true);
   $('propertyStatus').textContent = hit.fromManual ? '手动框选区域' : hit.fromOcr ? 'OCR 识别文字' : '原有文字';
   $('deleteEdit').classList.add('hidden');
   $('eraseOriginal').classList.remove('hidden');
+  if (hadPreview) renderPatches();
 }
 
 function selectPatch(id) {
   const patch = state.patchList.find((item) => item.id === id);
   if (!patch) return;
+  const hadPreview = Boolean(state.preview);
+  state.preview = null;
   state.selected = { kind: 'patch', id };
   setPropertyDrawer(true);
   if (patch.kind === 'signature') {
@@ -777,9 +783,12 @@ function selectPatch(id) {
   $('deleteEdit').classList.remove('hidden');
   $('eraseOriginal').classList.add('hidden');
   document.querySelectorAll('.patch-item').forEach((node) => node.classList.toggle('active', node.dataset.patch === id));
+  if (hadPreview) renderPatches();
 }
 
 function clearSelection() {
+  const hadPreview = Boolean(state.preview);
+  state.preview = null;
   state.selected = null;
   setPropertyDrawer(false);
   $('noSelection').classList.remove('hidden');
@@ -787,6 +796,7 @@ function clearSelection() {
   $('propertyStatus').textContent = '无选中项目';
   $('eraseOriginal').classList.add('hidden');
   document.querySelectorAll('.patch-item.active').forEach((node) => node.classList.remove('active'));
+  if (hadPreview) renderPatches();
 }
 
 function setPropertyDrawer(expanded) {
@@ -827,6 +837,7 @@ function showProperties(item) {
 // redaction: the original PDF bytes and searchable text can remain embedded.
 function eraseOriginalText() {
   if (state.selected?.kind !== 'hit') return;
+  state.preview = null;
   snapshot();
   const patch = { ...state.selected, id: newId(), kind: 'erase', text: '' };
   state.patchList.push(patch);
@@ -853,6 +864,32 @@ function fittedTextMetrics(patch) {
   return { fontSize: Math.max(1, size), family };
 }
 
+function textPropertiesFromInputs() {
+  return {
+    text: $('editText').value,
+    fontSize: clamp(Number($('fontSize').value) || 12, 5, 96),
+    fontFamily: $('fontFamily').value,
+    color: $('fontColor').value,
+    background: $('backgroundColor').value,
+    bold: $('fontBold').checked,
+    italic: $('fontItalic').checked,
+  };
+}
+
+// The draft is rendered on top of the original PDF without mutating history.
+// Apply commits it; switching selections or Escape discards it.
+function updateLivePreview() {
+  if (!state.selected || state.busy) return;
+  const original = state.selected.kind === 'patch'
+    ? state.patchList.find((item) => item.id === state.selected.id)
+    : state.selected;
+  if (!original || original.kind === 'signature' || original.kind === 'erase') return;
+  state.preview = { ...original, ...textPropertiesFromInputs(),
+    kind: original.kind === 'hit' ? 'replace' : original.kind,
+    id: original.kind === 'hit' ? '__live_preview' : original.id, isPreview: true };
+  renderPatches();
+}
+
 function snapshot() {
   state.undoStack.push(clone(state.patchList));
   if (state.undoStack.length > 25) state.undoStack.shift();
@@ -862,11 +899,11 @@ function snapshot() {
 function applyEdit() {
   if (!state.selected) return;
   if (state.selected.kind === 'patch' && ['signature', 'erase'].includes(state.patchList.find((patch) => patch.id === state.selected.id)?.kind)) return;
-  const text = $('editText').value;
-  const fontSize = clamp(Number($('fontSize').value) || 12, 5, 96);
-  const props = { text, fontSize, fontFamily: $('fontFamily').value, color: $('fontColor').value, background: $('backgroundColor').value, bold: $('fontBold').checked, italic: $('fontItalic').checked };
+  const props = textPropertiesFromInputs();
+  const { text } = props;
   if (!text.trim()) return toast('请输入要显示的文字。', true);
   snapshot();
+  state.preview = null;
   if (state.selected.kind === 'patch') {
     const patch = state.patchList.find((p) => p.id === state.selected.id);
     if (patch) Object.assign(patch, props);
@@ -909,11 +946,15 @@ function renderPatchesForPage(pageIndex) {
   const layer = wrap.querySelector('.patch-layer');
   layer.replaceChildren();
   const scale = pageScale(wrap);
-  for (const patch of state.patchList.filter((p) => p.page === pageIndex)) {
+  const patches = state.patchList.filter((p) => p.page === pageIndex)
+    .map((patch) => state.preview?.id === patch.id ? state.preview : patch);
+  if (state.preview?.id === '__live_preview' && state.preview.page === pageIndex) patches.push(state.preview);
+  for (const patch of patches) {
     const el = document.createElement('div');
     el.className = 'patch-item';
     if (state.selected?.id === patch.id) el.classList.add('active');
     el.dataset.patch = patch.id;
+    if (patch.isPreview) { el.classList.add('live-preview'); el.style.pointerEvents = 'none'; }
     el.style.left = `${patch.x * scale}px`;
     el.style.top = `${patch.y * scale}px`;
     el.style.minWidth = `${patch.kind === 'replace' || patch.kind === 'erase' ? patch.width * scale : 10}px`;
@@ -942,7 +983,8 @@ function renderPatchesForPage(pageIndex) {
       text.textContent = patch.kind === 'erase' ? '' : patch.text;
       el.append(text);
     }
-    el.addEventListener('click', (e) => { e.stopPropagation(); selectPatch(patch.id); });
+    if (!patch.isPreview) el.addEventListener('click', (e) => { e.stopPropagation(); selectPatch(patch.id); });
+    if (patch.isPreview) { layer.append(el); continue; }
     el.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
       event.stopPropagation();
@@ -1295,24 +1337,35 @@ async function pdfToPositionedWord(input) {
 
 async function packWordWithFrames(paragraphs, frames, widthPt, heightPt) {
   const docx = window.docx;
-  const pageProps = { type: docx.SectionType.NEXT_PAGE, page: {
+  const pageProps = { page: {
     size: { width: Math.round(widthPt * 20), height: Math.round(heightPt * 20) },
     margin: { left: 0, right: 0, top: 0, bottom: 0 },
   } };
-  // Anchored paragraphs do not advance the Word body's pagination. An
-  // ordinary break paragraph adds a blank page in some Word viewers. Give
-  // each source PDF page its own next-page DOCX section instead.
+  // Each PDF page gets one tiny in-flow marker. Floating page-anchored
+  // images/text frames alone do not advance the body; NEXT_PAGE sections
+  // after full-bleed frames can be interpreted by Microsoft Word as an extra
+  // blank sheet. A single section with one real marker per page avoids both.
   const groups = [];
   for (let index = 0; index < frames.length; index++) {
     const rect = frames[index];
     if (rect && rect.x === 0 && rect.y === 0 &&
         Math.abs(rect.w - widthPt) < .1 && Math.abs(rect.h - heightPt) < .1) {
-      groups.push([]);
+      groups.push({ children: [], positions: [] });
     }
     if (!groups.length) throw new Error('Word 逐页定位缺少背景起点');
-    groups[groups.length - 1].push(paragraphs[index]);
+    groups[groups.length - 1].children.push(paragraphs[index]);
+    groups[groups.length - 1].positions.push(rect);
   }
-  const wordDoc = new docx.Document({ sections: groups.map((children) => ({ properties: pageProps, children })) });
+  const inFlowParagraphs = [];
+  const frameLocations = [];
+  for (let pageIndex = 0; pageIndex < groups.length; pageIndex++) {
+    inFlowParagraphs.push(new docx.Paragraph({ text: '', pageBreakBefore: pageIndex > 0,
+      spacing: { before: 0, after: 0, line: 1, lineRule: 'exact' } }));
+    frameLocations.push(null);
+    inFlowParagraphs.push(...groups[pageIndex].children);
+    frameLocations.push(...groups[pageIndex].positions);
+  }
+  const wordDoc = new docx.Document({ sections: [{ properties: pageProps, children: inFlowParagraphs }] });
   const originalBlob = await docx.Packer.toBlob(wordDoc);
   const archive = await window.JSZip.loadAsync(originalBlob);
   const xmlFile = archive.file('word/document.xml');
@@ -1320,12 +1373,10 @@ async function packWordWithFrames(paragraphs, frames, widthPt, heightPt) {
   const dom = new DOMParser().parseFromString(await xmlFile.async('string'), 'application/xml');
   const wordNs = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   const body = dom.getElementsByTagNameNS(wordNs, 'body')[0];
-  const nodes = [...body.children].filter((el) => el.localName === 'p' && !(
-    el.getElementsByTagNameNS(wordNs, 'sectPr').length &&
-    !el.getElementsByTagNameNS(wordNs, 'r').length));
-  if (nodes.length !== frames.length) throw new Error('Word 版面锚点数量不一致');
+  const nodes = [...body.children].filter((el) => el.localName === 'p');
+  if (nodes.length !== frameLocations.length) throw new Error('Word 版面锚点数量不一致');
   for (let index = 0; index < nodes.length; index++) {
-    const pos = frames[index];
+    const pos = frameLocations[index];
     if (!pos) continue;
     const paragraph = nodes[index];
     let properties = [...paragraph.children].find((el) => el.localName === 'pPr');
@@ -1447,6 +1498,13 @@ async function wordPageDefinition(arrayBuffer) {
   const zip = await window.JSZip.loadAsync(arrayBuffer.slice(0));
   const xml = zip.file('word/document.xml');
   if (!xml) throw new Error('DOCX 缺少页面定义');
+  let declaredPages = 0;
+  const propsXml = zip.file('docProps/app.xml');
+  if (propsXml) {
+    const propsDoc = new DOMParser().parseFromString(await propsXml.async('string'), 'text/xml');
+    const value = Number(propsDoc.getElementsByTagName('Pages')[0]?.textContent || 0);
+    if (Number.isInteger(value) && value > 0 && value <= 500) declaredPages = value;
+  }
   const dom = new DOMParser().parseFromString(await xml.async('string'), 'text/xml');
   const pages = [...dom.getElementsByTagNameNS('*', 'pgSz')];
   const size = pages[pages.length - 1];
@@ -1458,7 +1516,8 @@ async function wordPageDefinition(arrayBuffer) {
     return Boolean(wordFirst(props, 'pageBreakBefore')) ||
       [...p.getElementsByTagNameNS('*', 'br')].some((b) => wordAttr(b, 'type') === 'page');
   }).length;
-  return { widthPx: widthTwips / 15, heightPx: heightTwips / 15, explicitBreaks: starts };
+  return { widthPx: widthTwips / 15, heightPx: heightTwips / 15,
+    explicitBreaks: starts, declaredPages };
 }
 
 async function renderDocxToPdf(file) {
@@ -1545,6 +1604,9 @@ async function renderDocxToPdf(file) {
       }
     }
     if (!pdf.getPageCount()) throw new Error('没有可导出的 Word 页面');
+    if (documentPage.declaredPages && pdf.getPageCount() !== documentPage.declaredPages) {
+      throw new Error(`Word 原文件记录为 ${documentPage.declaredPages} 页，浏览器仅排出 ${pdf.getPageCount()} 页。已阻止错误分页的 PDF 下载，也不会扣除导出次数。此文件需要 Microsoft Word / WPS / LibreOffice 原生排版引擎转换。`);
+    }
     return { bytes: await pdf.save(), pages: pdf.getPageCount() };
   } finally { host.remove(); }
 }
@@ -1747,6 +1809,10 @@ function init() {
   $('ocrTool').onclick = ocrVisiblePage;
   $('ocrSelectionTool').onclick = ocrSelectedRegion;
   $('applyEdit').onclick = applyEdit;
+  for (const id of ['editText', 'fontSize', 'fontFamily', 'fontColor', 'backgroundColor', 'fontBold', 'fontItalic']) {
+    $(id).addEventListener('input', updateLivePreview);
+    $(id).addEventListener('change', updateLivePreview);
+  }
   $('eraseOriginal').onclick = eraseOriginalText;
   $('deleteEdit').onclick = deleteSelectedPatch;
   $('undoTool').onclick = undo;

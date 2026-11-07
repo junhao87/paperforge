@@ -12,8 +12,8 @@ async function run() {
   const paragraphs = [];
   const anchors = [];
   for (let n = 0; n < 3; n++) {
-    if (n && mode !== 'inline' && mode !== 'sections') {
-      paragraphs.push(new docx.Paragraph({text: '', pageBreakBefore: true,
+    if ((n && mode !== 'inline' && mode !== 'sections') || mode === 'markers') {
+      paragraphs.push(new docx.Paragraph({text: '', pageBreakBefore: n > 0,
         spacing: {before: 0, after: 0, line: mode === 'separate' ? 20 : 1, lineRule: 'exact'}}));
       anchors.push(false);
     }

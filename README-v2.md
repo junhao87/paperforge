@@ -1,4 +1,4 @@
-# PaperForge v2.5 Beta — GitHub Pages + Supabase + PWA
+# PaperForge v2.6 Beta — GitHub Pages + Supabase + PWA
 
 目前环境：**不用 VPS**；静态网站继续放在 GitHub Pages；Google 登录、会员状态、免费次数和管理员审批记录交由 Supabase 托管。收款使用管理员自己的 QR Code，管理员收到钱后手动审批。
 
@@ -103,13 +103,15 @@ GitHub 网页 `Repository → Settings → Pages` 保持：**Deploy from a branc
 - **OCR v2.5**：高分辨率中英文字识别，优先使用 Tesseract 每个单词的坐标，把同一水平线相隔较大空白的文字拆为独立区域。例如 `as stakeholder.` 与 `Pay to landlord` 可以分别选择。普通识别无结果会自动增强对比度并重试；还可用「框选改字」精确指定区域。
 - **单独删除原字**：选中 PDF 文字、OCR 文字或手动框选区域后，点击「仅删除原有文字（遮盖）」。此操作仅视觉遮盖，不是对底层 PDF 字节的永久安全删除。若需销毁敏感信息，请用专业 PDF 脱敏工具。
 - **手机改字避免双层溢出**：替换文字预览及 PDF 导出统一按原文字框的宽高约束字号，防止新文字把相邻合同条款盖住。点击「应用修改」会自动收起手机属性底部抽屉。若 OCR 矩形选错，应重新框选准确的原文字区域。
+- **实时文字预览 v2.6**：选中 PDF 原字或已添加文字后，直接修改右侧文字、字号、字体、颜色、粗体和斜体，页面会即时显示紫色虚线预览。正式点击「应用修改」时才记录进撤销历史和 PDF 导出；按 Escape 或改选其他位置会取消尚未应用的预览。
 - **无需 OCR 的框选改字**：点击「框选改字」，按住鼠标或手指框住旧文字，在属性栏填写替换内容并点「应用修改」。即使 Tesseract 网络不可用，也可以遮盖旧扫描文字并添加新字。复杂背景、手写体、表格线可能留下遮盖痕迹，并不是原生文字层编辑。
 - **OCR 选区**：如果「OCR 本页」仍无法识别，先点击「框选改字」拖出一个较小的文字区域，再点「OCR 选区」。系统针对该区域尝试单块识别，若没有文字则增强对比度后按单行识别；识别结果会写进右侧编辑框，校对后点「应用修改」。此功能不需要整页 OCR 成功。
 - **独立签名**：点击「手写签名」，用鼠标、手指或触控笔签字，选择「手动点位置」或「直接放到本页」。无需 OCR；可以拖动或调整大小。此功能是**透明 PNG 视觉签名**，不提供基于证书的数字签名。
 - **处理进度弹窗**：打开文件、OCR 本页、OCR 选区、PDF→Word、Word→PDF、保存 PDF 时，会显示阻止误操作的 Loading 弹窗，部分步骤还会显示处理中的页码。成功、失败、授权界面出现时自动关闭。
 - **手机与 iPad**：工具栏改为可横向滑动的触摸按钮；手机端把属性编辑改为可以「展开/收起」的底部抽屉，选中文字后自动展开，点击空白区域可收起。页面在小屏幕按宽度缩放，并保留签名板与触控框选。请在 iOS Safari / Android Chrome / iPadOS Safari 实机再验收。
-- **PDF→Word 分页修复**：两种转换模式都为原 PDF 每一页创建一个独立 Word Section，取消容易引入空白页的额外分页段落。固定版式可编辑模式继续保留图形背景及文字定位；原貌模式仍是逐页图像。已用三页模拟 Word 框架检查，LibreOffice 渲染结果为三页，每页都有内容。
-- **Word→PDF 分页增强（仍非零偏差）**：优先读取 Word 文件内部的纸张尺寸以及明确分页符，并按这些边界独立捕获，不再根据扩张的章节高度把第二页吞进第一页。如果预览引擎忽略明确分页，则阻止导出并显示具体错误；不会在有风险时生成错误合同 PDF。**浏览器的 `docx-preview` 无法重现全部 Word 自动分页算法**。特别重要的合同仍建议用 Microsoft Word 自带的「另存为 PDF」。
+- **PDF→Word 分页修复 v2.6**：检查用户新上传的 17 页合同，发现生成文件虽可由 LibreOffice 渲染为 17 页，但 Microsoft Word 中可能因每页 `NEXT_PAGE` Section 和整页浮动文字框组合出现空白页。现改为单一 Word Section，每个原始 PDF 页先放一个 1-twip 普通文流分页标记，再放页面锚定背景及可编辑文字框，避免独立 Section 带来的空白页问题。三页测试文档渲染为三页，每页均有内容；Microsoft Word 实际呈现仍请现场复测。
+- **Word→PDF 分页保护 v2.6（仍非零偏差）**：优先读取 Word 文件内部的纸张尺寸、明确分页符及 `docProps/app.xml` 保存的页数，按明确边界分别捕获。如果浏览器转换后的 PDF 页数和 Word 文档记录的页数不一致，则取消错误 PDF 下载，且不扣除免费次数。**无法凭网页端 `docx-preview` 精确重现 Word 自动分页算法**；如果需完全相同的输出，仍需要 Microsoft Word / WPS / LibreOffice 原生转换引擎。
+- **本次用户文件诊断**：`1 Jalan Perdagangan 3 Agreement.pdf` 原版 17 页，原 PaperForge DOCX 由 LibreOffice 渲染为 17 页，但在 Microsoft Word 显示额外空白，说明需调整 Word 分页结构；`42, 42A,42B Jalan Jati 1.docx` 原版在 `docProps/app.xml` 记录 12 页，LibreOffice 导出亦为 12 页，而 PaperForge 浏览器 PDF 输出只有 9 页，确认前端自动分页失真。本次加入页数拦截，未声称浏览器已获得 Office 级精度。
 - **样本检查**：先前提供的 `42, 42A, 42B Jalan Jati 1` 原 PDF 为 12 页，对应原 DOCX 的 LibreOffice 输出为 13 页。请继续人工核对其最终分页，因为 Word 来源和 PDF 来源本身已不完全一致。
 - **安装为手机 App（PWA）**：上传全部网站文件（包括 `manifest.webmanifest`、`sw.js` 和 `assets/paperforge-icon-*`）后，Android Chrome 可从菜单选择「安装应用」，iPhone / iPad 使用 Safari 的「分享 → 添加到主屏幕」。也可点击网页顶部「安装 App」查看当前平台的操作提示。安装后会显示专用紫色 PaperForge 图标；此 App 仍需要网络完成 Google 登录和云端会员授权，不是完全离线版。
 - 图章、扫描背景、复杂图层、特殊字体、文字旋转、表格/多栏等可能有明显误差。
@@ -134,7 +136,10 @@ GitHub 网页 `Repository → Settings → Pages` 保持：**Deploy from a branc
 - [ ] 即使 OCR 失败，也能框选文字、修改并导出
 - [ ] OCR / PDF→Word / Word→PDF 处理期间会显示明确的 Loading 弹窗
 - [ ] 用 3 页、12 页 PDF 检查转成 Word 后页数相同，没有每页间的空白页
+- [ ] 使用 Microsoft Word 打开 17 页新转换合同，确认没有插入空白页（不能只依赖 LibreOffice）
 - [ ] 用带 `Page Break Before` 的 Word 检查转换后的 PDF 没有把第二页挤进第一页
+- [ ] 用此次 12 页 WPS Word 试 Word→PDF；若仅渲染 9 页，应该出现明确错误且不扣次数
+- [ ] 编辑器输入文字时即时显示紫色虚线预览，切换文字会取消草稿；应用后内容正式保留
 - [ ] 手机 OCR 替换一段长文本，旧字不应在新字下方残留；应用修改后属性面板收起
 - [ ] 选中旧文字，仅做「遮盖删除」，并检查附近文字不受影响
 - [ ] iPhone / Android 加到主屏幕后显示 PaperForge 图标并正常启动

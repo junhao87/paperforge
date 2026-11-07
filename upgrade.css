@@ -1,4 +1,4 @@
-/* PaperForge 2.5: isolated text regions, safe-width editing, mobile drawer and installable app. */
+/* PaperForge 2.6: live text previews and robust page markers. */
 .progress-overlay{position:fixed;inset:0;z-index:89;background:#0b142bc2;backdrop-filter:blur(4px);display:grid;place-items:center;padding:20px}
 .progress-card{width:min(390px,100%);background:#fff;border-radius:22px;padding:32px 25px 27px;text-align:center;box-shadow:0 25px 90px #0a18304f;color:#24314c}
 .progress-symbol{position:relative;width:82px;height:82px;margin:0 auto 18px;display:grid;place-items:center;color:#725af5}
@@ -46,6 +46,7 @@
 .install-app-btn{background:#f5f2ff;color:#6953d2;border:1px solid #e1d9ff;border-radius:9px;font-weight:700;font-size:11px;padding:10px 12px;white-space:nowrap}
 .install-app-btn:hover{background:#e9e2ff}
 .patch-item{box-sizing:border-box}
+.patch-item.live-preview{outline:1.5px dashed #7358ec;outline-offset:1px}
 .patch-item:has(span:empty){min-height:8px}
 @media(max-width:900px){.convert-mode{flex-direction:column}.editor-toolbar{flex-wrap:wrap}.tool-group:first-child{flex-wrap:wrap}.page-stack{max-width:100%}.page-wrap{max-width:none}}
 @media(max-width:600px){
