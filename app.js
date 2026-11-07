@@ -17,6 +17,7 @@ const state = {
   name: '', bytes: null, pdf: null, textPages: [], patchList: [], undoStack: [],
   selected: null, preview: null, tool: 'edit', zoom: 1, renderId: 0, view: 'home',
   converter: 'pdf-word', busy: false, ocrPages: new Map(), signatureData: null,
+  lastExport: null,
 };
 
 const formatBytes = (n) => n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -58,8 +59,58 @@ function toast(message, error = false) {
   toastTimer = setTimeout(() => element.classList.add('hidden'), error ? 6500 : 3600);
 }
 
-function downloadBlob(data, fileName) {
-  const blob = data instanceof Blob ? data : new Blob([data], { type: 'application/pdf' });
+function fileMimeType(fileName) {
+  return /\.docx$/i.test(fileName)
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : 'application/pdf';
+}
+
+function closeExportComplete() {
+  $('exportCompleteOverlay').classList.add('hidden');
+}
+
+function showExportComplete(blob, fileName) {
+  state.lastExport = { blob, fileName };
+  $('exportCompleteFileName').textContent = fileName;
+  $('exportCompleteFileMeta').textContent = `${/\.docx$/i.test(fileName) ? 'Word 文档' : 'PDF 文档'} · ${formatBytes(blob.size)}`;
+  $('exportShareStatus').classList.add('hidden');
+  $('exportCompleteOverlay').classList.remove('hidden');
+  $('exportCompleteClose').focus();
+}
+
+function shareExportFile(preferredApp = '') {
+  const saved = state.lastExport;
+  if (!saved) return;
+  let file;
+  let supported = false;
+  try {
+    file = new File([saved.blob], saved.fileName, { type: fileMimeType(saved.fileName) });
+    supported = typeof navigator.share === 'function'
+      && typeof navigator.canShare === 'function'
+      && navigator.canShare({ files: [file] });
+  } catch (_) {
+    supported = false;
+  }
+  if (!supported) {
+    const app = preferredApp ? `分享到 ${preferredApp}：` : '';
+    $('exportShareStatus').textContent = `${app}当前浏览器不支持直接分享此文件。请点击「再次下载」，再到聊天软件中选择「附加文件」发送。`;
+    $('exportShareStatus').classList.remove('hidden');
+    return;
+  }
+  // The OS chooses the destination app. Neither a website nor the share API can force one.
+  // Invoke share immediately in the user's click handler to preserve transient activation.
+  navigator.share({ files: [file], title: saved.fileName }).then(() => {
+    $('exportShareStatus').textContent = '分享窗口已完成操作。';
+    $('exportShareStatus').classList.remove('hidden');
+  }).catch((error) => {
+    if (error?.name === 'AbortError') return;
+    $('exportShareStatus').textContent = '无法通过系统分享此文件，请再次下载后在聊天软件内发送附件。';
+    $('exportShareStatus').classList.remove('hidden');
+  });
+}
+
+function downloadBlob(data, fileName, { showCompletion = true } = {}) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type: fileMimeType(fileName) });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -68,6 +119,7 @@ function downloadBlob(data, fileName) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 120000);
+  if (showCompletion) showExportComplete(blob, fileName);
 }
 
 function busy(value, message = '') {
@@ -1793,6 +1845,15 @@ function init() {
   $('quickWordPdf').onclick = () => configureConverter('word-pdf');
   $('closeModal').onclick = () => $('modalOverlay').classList.add('hidden');
   $('modalOverlay').onclick = (event) => { if (event.target === $('modalOverlay')) $('modalOverlay').classList.add('hidden'); };
+  $('exportCompleteClose').onclick = closeExportComplete;
+  $('exportCompleteOverlay').onclick = (event) => { if (event.target === $('exportCompleteOverlay')) closeExportComplete(); };
+  $('exportDownloadAgain').onclick = () => {
+    if (state.lastExport) downloadBlob(state.lastExport.blob, state.lastExport.fileName, { showCompletion: false });
+  };
+  $('exportShareSystem').onclick = () => shareExportFile();
+  $('exportShareWhatsApp').onclick = () => shareExportFile('WhatsApp');
+  $('exportShareTelegram').onclick = () => shareExportFile('Telegram');
+  $('exportShareWeChat').onclick = () => shareExportFile('微信');
   $('loadUrl').onclick = loadPdfUrl;
   $('urlInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') loadPdfUrl(); });
   $('heroUpload').onclick = (event) => { event.stopPropagation(); openFilePicker(); };
@@ -1819,6 +1880,7 @@ function init() {
   $('zoomIn').onclick = async () => { state.zoom = clamp(Math.round((state.zoom + .2) * 10) / 10, .5, 2.2); $('zoomValue').textContent = `${Math.round(state.zoom * 100)}%`; await renderPages(); };
   $('zoomOut').onclick = async () => { state.zoom = clamp(Math.round((state.zoom - .2) * 10) / 10, .5, 2.2); $('zoomValue').textContent = `${Math.round(state.zoom * 100)}%`; await renderPages(); };
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('exportCompleteOverlay').classList.contains('hidden')) { closeExportComplete(); return; }
     if (e.key === 'Escape') { $('modalOverlay').classList.add('hidden'); $('signatureOverlay').classList.add('hidden'); clearSelection(); setTool('edit'); }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) { e.preventDefault(); undo(); }
   });

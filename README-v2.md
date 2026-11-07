@@ -1,4 +1,12 @@
-# PaperForge v2.6 Beta — GitHub Pages + Supabase + PWA
+# PaperForge v2.7 Beta — GitHub Pages + Supabase + PWA
+
+## v2.7：导出完成弹窗及手机文件分享
+
+- PDF 编辑器导出、PDF 转 Word、Word 转 PDF 只要成功生成并开始下载，都会显示「导出完成」弹窗，列出文件名、文件类型及大小，可再次下载。
+- 弹窗提供「分享文件」、WhatsApp、Telegram、微信入口；这些按钮会调用浏览器/系统的**文件分享菜单**，用户须在系统菜单中实际选择目标 App 与联系人。网站不能强制指定某个 App。
+- 通过系统分享发送的是生成的真实 PDF / DOCX 文件，不会把私人合同上传到公开网站。若浏览器不支持 Web Share API 的文件分享，会提示「再次下载」并通过社交 App 聊天窗口附加文件。
+- 此弹窗表示文件成功生成且浏览器已发起下载，不表示已验证设备保存路径，亦不表示文件已实际发送给联系人。
+- PWA 版本缓存升级为 v2.7，部署后需等待 Service Worker 更新并刷新页面。
 
 目前环境：**不用 VPS**；静态网站继续放在 GitHub Pages；Google 登录、会员状态、免费次数和管理员审批记录交由 Supabase 托管。收款使用管理员自己的 QR Code，管理员收到钱后手动审批。
 

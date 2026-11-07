@@ -1,4 +1,4 @@
-const CACHE_NAME = 'paperforge-shell-v2-6';
+const CACHE_NAME = 'paperforge-shell-v2-7';
 const SHELL = [
   './', './index.html', './styles.css', './upgrade.css', './membership.css',
   './manifest.webmanifest', './assets/paperforge-icon.svg',
